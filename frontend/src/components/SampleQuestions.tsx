@@ -8,11 +8,9 @@ interface SampleQuestionsProps {
 }
 
 const sampleQuestions = [
-  "In which year was the actor who played Harry Potter born?",
-  "What is the population of the city where Harvard University is located?",
-  "Who is the author of the book that the movie 'The Shawshank Redemption' is based on?",
-  "What genre of music is performed by the band that released the album 'Dark Side of the Moon'?",
-  "What is the capital of the country where Mount Everest is located?",
+  "Which magazine was started first, Arthur's Magazine or First for Women?",
+  "Who is the artist of The Scarlet Letter and debuted on the music scene as Missy Elliott's protégée?",
+  "Which band, formed in 2009, is best known for their hit song 'Cool Kids?'",
 ];
 
 export const SampleQuestions: React.FC<SampleQuestionsProps> = ({ onQuestionSelect }) => {
@@ -22,21 +20,21 @@ export const SampleQuestions: React.FC<SampleQuestionsProps> = ({ onQuestionSele
         <HelpCircle className="w-5 h-5 text-secondary" />
         <h3 className="font-semibold text-foreground">Sample Questions</h3>
       </div>
-      
+
       <div className="grid gap-2">
         {sampleQuestions.map((question, index) => (
           <Button
             key={index}
             variant="outline"
-            className="text-left h-auto p-3 justify-start border-border hover:border-primary/50 hover:bg-primary/5 transition-all duration-200"
+            className="text-left h-auto p-3 justify-start border-border hover:border-primary/50 hover:bg-primary/5 transition-all duration-200 whitespace-normal break-words"
             onClick={() => onQuestionSelect(question)}
           >
             <span className="text-sm text-muted-foreground mr-2">{index + 1}.</span>
-            <span className="text-sm">{question}</span>
+            <span className="text-sm whitespace-normal break-words w-full block">{question}</span>
           </Button>
         ))}
       </div>
-      
+
       <p className="text-xs text-muted-foreground mt-4 text-center">
         Click any question to automatically fill the input field
       </p>
