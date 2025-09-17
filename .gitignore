@@ -1,0 +1,17 @@
+backend/hotpot_QA_distractor_10k
+backend/.langgraph_api
+backend/.env
+frontend/.env
+
+# Python cache files
+__pycache__/
+*.pyc
+
+# Node.js dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.yarn-integrity
+

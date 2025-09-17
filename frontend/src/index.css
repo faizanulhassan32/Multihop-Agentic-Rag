@@ -1,0 +1,159 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Multi-Hop Agentic RAG Design System */
+
+@layer base {
+  :root {
+    /* Core Colors - Inspired by detective/investigation theme */
+    --background: 240 10% 3.9%;
+    --foreground: 0 0% 98%;
+
+    --card: 240 10% 7%;
+    --card-foreground: 0 0% 98%;
+
+    --popover: 240 10% 7%;
+    --popover-foreground: 0 0% 98%;
+
+    /* Primary - Warm amber with detective feel */
+    --primary: 38 92% 50%;
+    --primary-foreground: 0 0% 98%;
+    --primary-glow: 38 92% 60%;
+
+    /* Secondary - Neutral slate */
+    --secondary: 215 25% 27%;
+    --secondary-foreground: 0 0% 98%;
+
+    /* Success - Database connected green */
+    --success: 142 76% 36%;
+    --success-foreground: 0 0% 98%;
+
+    /* Warning - Attention amber */
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 98%;
+
+    --muted: 240 5% 15%;
+    --muted-foreground: 240 5% 64.9%;
+
+    --accent: 240 5% 15%;
+    --accent-foreground: 0 0% 98%;
+
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+
+    --border: 240 6% 20%;
+    --input: 240 6% 20%;
+    --ring: 38 92% 50%;
+
+    --radius: 0.75rem;
+
+    /* Chat Colors */
+    --user-message: 38 92% 50%;
+    --assistant-message: 240 5% 15%;
+    --chat-input: 240 6% 10%;
+
+    /* Gradients */
+    --gradient-primary: linear-gradient(135deg, hsl(38 92% 50%), hsl(38 92% 60%));
+    --gradient-hero: linear-gradient(135deg, hsl(240 10% 3.9%), hsl(240 6% 10%));
+    --gradient-card: linear-gradient(145deg, hsl(240 10% 7%), hsl(240 6% 12%));
+
+    /* Shadows */
+    --shadow-glow: 0 0 30px hsl(38 92% 50% / 0.3);
+    --shadow-card: 0 8px 32px hsl(240 10% 3.9% / 0.5);
+
+    /* Animations */
+    --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    --transition-bounce: all 0.5s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+
+    /* Sidebar colors for completeness */
+    --sidebar-background: 240 10% 7%;
+    --sidebar-foreground: 0 0% 98%;
+    --sidebar-primary: 38 92% 50%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 240 5% 15%;
+    --sidebar-accent-foreground: 0 0% 98%;
+    --sidebar-border: 240 6% 20%;
+    --sidebar-ring: 38 92% 50%;
+  }
+
+  .light {
+    /* Light mode variant (optional future support) */
+    --background: 0 0% 100%;
+    --foreground: 240 10% 3.9%;
+    --card: 0 0% 98%;
+    --card-foreground: 240 10% 3.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 10% 3.9%;
+    --primary: 217 91% 60%;
+    --primary-foreground: 0 0% 98%;
+    --primary-glow: 217 91% 70%;
+    --secondary: 45 93% 47%;
+    --secondary-foreground: 240 10% 3.9%;
+    --success: 142 76% 36%;
+    --success-foreground: 0 0% 98%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 98%;
+    --muted: 240 5% 96%;
+    --muted-foreground: 240 5% 45%;
+    --accent: 240 5% 96%;
+    --accent-foreground: 240 5% 11%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 6% 90%;
+    --input: 240 6% 90%;
+    --ring: 217 91% 60%;
+    --user-message: 217 91% 60%;
+    --assistant-message: 240 5% 96%;
+    --chat-input: 0 0% 100%;
+    --gradient-primary: linear-gradient(135deg, hsl(217 91% 60%), hsl(217 91% 70%));
+    --gradient-hero: linear-gradient(135deg, hsl(0 0% 100%), hsl(240 5% 98%));
+    --gradient-card: linear-gradient(145deg, hsl(0 0% 98%), hsl(240 5% 96%));
+    --shadow-glow: 0 0 30px hsl(217 91% 60% / 0.2);
+    --shadow-card: 0 4px 24px hsl(240 10% 3.9% / 0.1);
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-semibold tracking-tight;
+  }
+
+  code {
+    @apply relative rounded bg-muted px-[0.3rem] py-[0.2rem] font-mono text-sm font-medium;
+  }
+}
+
+@layer components {
+  .prose {
+    @apply text-foreground;
+  }
+  
+  .prose h1, .prose h2, .prose h3, .prose h4 {
+    @apply text-foreground font-semibold;
+  }
+  
+  .prose p {
+    @apply text-foreground/90;
+  }
+  
+  .prose code {
+    @apply bg-muted text-foreground px-1 py-0.5 rounded;
+  }
+  
+  .prose pre {
+    @apply bg-muted border border-border rounded-lg p-4 overflow-x-auto;
+  }
+  
+  .prose blockquote {
+    @apply border-l-4 border-primary pl-4 italic text-muted-foreground;
+  }
+}
