@@ -76,18 +76,25 @@ export const sendChatMessage = async (
   onProgress?: (progress: string) => void
 ): Promise<string> => {
   try {
-    const client = getLangGraphClient();
     const assistantId = import.meta.env.VITE_ASSISTANT_ID;
     if (!assistantId) {
-      console.error('[sendChatMessage] No assistant ID found in env.');
       throw new Error('Assistant ID is not set. Please set VITE_ASSISTANT_ID in your .env file.');
     }
-    console.log('[sendChatMessage] Using assistant ID:', assistantId);
-    console.log('[sendChatMessage] Creating thread...');
-    const thread = await client.threads.create();
-    console.log('[sendChatMessage] Thread created:', thread);
 
-    // Prepare input and config
+    // Create thread
+    const threadResponse = await fetch('http://localhost:2024/threads', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+
+    if (!threadResponse.ok) {
+      throw new Error('Failed to create thread');
+    }
+
+    const thread = await threadResponse.json();
+
+    // Prepare input and config (same as Streamlit)
     const inputState = { original_question: message };
     const config = {
       configurable: {
@@ -96,98 +103,114 @@ export const sendChatMessage = async (
         max_tokens: 500,
       }
     };
-    console.log('[sendChatMessage] Input state:', inputState);
-    console.log('[sendChatMessage] Config:', config);
 
-    // Try synchronous request first (simpler approach)
-    console.log('[sendChatMessage] Trying synchronous request...');
+    // Use streaming approach like Streamlit does
+    const streamResponse = await fetch(`http://localhost:2024/threads/${thread.thread_id}/runs/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        assistant_id: assistantId,
+        input: inputState,
+        config: config,
+        stream_mode: "values"  // This is the key - matches Streamlit!
+      })
+    });
+
+    if (!streamResponse.ok) {
+      throw new Error(`Stream request failed: ${streamResponse.status}`);
+    }
+
+    // Process the streaming response like Streamlit does
+    const reader = streamResponse.body?.getReader();
+    if (!reader) {
+      throw new Error('No response body reader available');
+    }
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let fullResponse = '';
+    let lastState: any = {};
+
     try {
-      const syncResponse = await fetch('http://localhost:2024/threads/' + thread.thread_id + '/runs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          assistant_id: assistantId,
-          input: inputState,
-          config: config
-          // Note: No stream_mode for synchronous request
-        })
-      });
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-      console.log('[sendChatMessage] Sync request status:', syncResponse.status);
-      console.log('[sendChatMessage] Sync request headers:', Object.fromEntries(syncResponse.headers.entries()));
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || ''; // Keep incomplete line in buffer
 
-      if (syncResponse.ok) {
-        const result = await syncResponse.json();
-        console.log('[sendChatMessage] Synchronous response:', result);
+        for (const line of lines) {
+          if (line.trim() === '') continue;
 
-        // Check if we got a complete result
-        if (result && result.final_answer) {
-          console.log('[sendChatMessage] Got final answer from sync request:', result.final_answer);
-          return result.final_answer;
-        }
+          try {
+            // Parse SSE format (Server-Sent Events)
+            if (line.startsWith('data: ')) {
+              const data = JSON.parse(line.slice(6));
 
-        // If the result has a run_id, poll for completion
-        if (result && result.run_id) {
-          console.log('[sendChatMessage] Got run_id, polling for completion:', result.run_id);
+              // Handle different event types like Streamlit does
+              if (data.event === 'values' && data.data) {
+                const chunkData = data.data;
 
-          // Poll for completion
-          const pollInterval = 2000; // 2 seconds
-          const maxPolls = 30; // Maximum 60 seconds
+                if (typeof chunkData === 'object') {
+                  // Update state like Streamlit does
+                  lastState = { ...lastState, ...chunkData };
 
-          for (let pollCount = 0; pollCount < maxPolls; pollCount++) {
-            try {
-              console.log(`[sendChatMessage] Polling attempt ${pollCount + 1}/${maxPolls}`);
+                  // Check for final answer like Streamlit does
+                  if (chunkData.final_answer) {
+                    fullResponse = chunkData.final_answer;
 
-              const threadStateResponse = await fetch(`http://localhost:2024/threads/${thread.thread_id}/state`);
-              if (threadStateResponse.ok) {
-                const threadState = await threadStateResponse.json();
-                console.log('[sendChatMessage] Polled thread state:', threadState);
+                    // Update progress if callback provided
+                    if (onProgress) {
+                      onProgress(`✅ Final Answer: ${fullResponse}`);
+                    }
 
-                if (threadState.values && threadState.values.final_answer) {
-                  const finalAnswer = threadState.values.final_answer;
-                  console.log('[sendChatMessage] Found final answer via polling:', finalAnswer);
-
-                  if (onProgress) {
-                    onProgress(`✅ Final Answer: ${finalAnswer}`);
+                    return fullResponse;
                   }
 
-                  return finalAnswer;
-                }
-
-                // Show progress based on current state
-                if (onProgress && threadState.values) {
-                  const state = threadState.values;
-                  if (state.decomposed_questions && state.decomposed_questions.length > 0) {
-                    const currentStep = (state.current_question_index || 0) + 1;
-                    const totalSteps = state.decomposed_questions.length;
+                  // Show progress updates like Streamlit does
+                  if (onProgress && chunkData.decomposed_questions?.length > 0) {
+                    const currentStep = (chunkData.current_question_index || 0) + 1;
+                    const totalSteps = chunkData.decomposed_questions.length;
                     onProgress(`🧠 Decomposed into ${totalSteps} questions. Processing step ${currentStep}/${totalSteps}...`);
                   }
 
-                  if (state.intermediate_answers && state.intermediate_answers.length > 0) {
-                    const answers = state.intermediate_answers;
+                  if (onProgress && chunkData.intermediate_answers?.length > 0) {
+                    const answers = chunkData.intermediate_answers;
                     const latestAnswer = answers[answers.length - 1];
                     onProgress(`💭 Gathering information: ${latestAnswer.substring(0, 100)}...`);
                   }
                 }
               }
-
-              // Wait before next poll
-              await new Promise(resolve => setTimeout(resolve, pollInterval));
-            } catch (error) {
-              console.warn(`[sendChatMessage] Poll attempt ${pollCount + 1} failed:`, error);
             }
+          } catch (parseError) {
+            console.warn('Failed to parse streaming chunk:', parseError);
+            continue;
           }
         }
-      } else {
-        const errorText = await syncResponse.text();
-        console.error('[sendChatMessage] Sync request failed:', syncResponse.status, errorText);
       }
-    } catch (syncError) {
-      console.warn('[sendChatMessage] Synchronous request failed:', syncError);
+    } finally {
+      reader.releaseLock();
     }
 
-    // If we get here, both sync and polling failed
-    console.warn('[sendChatMessage] All methods failed to get response');
+    // If we get here without finding a final answer, return the last known state
+    if (fullResponse) {
+      return fullResponse;
+    }
+
+    // Fallback: check final thread state
+    try {
+      const finalStateResponse = await fetch(`http://localhost:2024/threads/${thread.thread_id}/state`);
+      if (finalStateResponse.ok) {
+        const finalState = await finalStateResponse.json();
+        if (finalState.values?.final_answer) {
+          return finalState.values.final_answer;
+        }
+      }
+    } catch (error) {
+      console.warn('Failed to get final state:', error);
+    }
+
     return "I apologize, but I couldn't generate a complete response. Please try again.";
 
   } catch (error) {

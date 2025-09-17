@@ -30,7 +30,7 @@ const ChatInterface = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [currentSession, setCurrentSession] = useState<ChatSession | null>(null);
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
-  const [selectedModel, setSelectedModel] = useState('gemini-2.0-flash-lite');
+  const [selectedModel, setSelectedModel] = useState('llama3:latest');
   const [langGraphStatus, setLangGraphStatus] = useState<'checking' | 'connected' | 'disconnected'>('checking');
   const [progressMessage, setProgressMessage] = useState<string>('');
   const messagesEndRef = useRef<HTMLDivElement>(null);

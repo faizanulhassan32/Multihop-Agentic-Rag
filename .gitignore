@@ -1,5 +1,6 @@
-backend/hotpot_QA_distractor_10k
 backend/.langgraph_api
+backend/hotpot_QA_distractor_10k
+backend/hotpot_QA_distractor_1k_ollama
 backend/.env
 frontend/.env
 

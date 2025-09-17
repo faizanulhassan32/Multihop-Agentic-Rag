@@ -13,20 +13,10 @@ export const Instructions: React.FC = () => {
 
       <div className="space-y-4">
         <div className="space-y-3">
-          <div className="flex items-start gap-3">
-            <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20">
-              1
-            </Badge>
-            <div className="flex-1">
-              <p className="text-sm text-muted-foreground">
-                Make sure your <code className="bg-muted px-1.5 py-0.5 rounded text-xs">GOOGLE_API_KEY</code> is set in your environment.
-              </p>
-            </div>
-          </div>
 
           <div className="flex items-start gap-3">
             <Badge variant="outline" className="bg-secondary/10 text-secondary border-secondary/20">
-              2
+              1
             </Badge>
             <div className="flex-1">
               <p className="text-sm text-muted-foreground">
@@ -35,7 +25,7 @@ export const Instructions: React.FC = () => {
               <div className="bg-muted p-2 rounded mt-1">
                 <code className="text-xs flex items-center gap-1">
                   <Play className="w-3 h-3" />
-                  langgraph dev
+                  langgraph dev --allow-blocking
                 </code>
               </div>
             </div>
@@ -43,7 +33,7 @@ export const Instructions: React.FC = () => {
 
           <div className="flex items-start gap-3">
             <Badge variant="outline" className="bg-success/10 text-success border-success/20">
-              3
+              2
             </Badge>
             <div className="flex-1">
               <p className="text-sm text-muted-foreground">
@@ -54,7 +44,7 @@ export const Instructions: React.FC = () => {
 
           <div className="flex items-start gap-3">
             <Badge variant="outline" className="bg-warning/10 text-warning border-warning/20">
-              4
+              3
             </Badge>
             <div className="flex-1">
               <p className="text-sm text-muted-foreground">

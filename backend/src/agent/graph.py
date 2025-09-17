@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import os
 import warnings
+import json
+import re
 from typing import List, TypedDict, Any, Dict, Literal
 
 from langchain_core.documents import Document
@@ -10,13 +12,13 @@ from langchain_core.messages import BaseMessage
 from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableConfig
-from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+from langchain_ollama import ChatOllama, OllamaEmbeddings
 from langgraph.graph import StateGraph, END
 from langchain_chroma import Chroma
 from dotenv import load_dotenv
 load_dotenv()
 
-PERSIST_DIR = "./hotpot_QA_distractor_10k"
+PERSIST_DIR = "./hotpot_QA_distractor_1k_ollama"
 
 class Configuration(TypedDict):
     model: str
@@ -41,7 +43,7 @@ class RAGSystem:
         if self._vectorstore is None:
             self._vectorstore = Chroma(
                 persist_directory=PERSIST_DIR,
-                embedding_function=GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=os.getenv("GOOGLE_API_KEY"))
+                embedding_function=OllamaEmbeddings(model="nomic-embed-text:latest")
             )
             self._retriever = self._vectorstore.as_retriever(search_kwargs={"k": 5})
 
@@ -64,10 +66,9 @@ async def decompose_question(state: MultiHopState, config: RunnableConfig) -> Di
     configuration = config.get("configurable", {})
     
     llm = await asyncio.to_thread(
-        ChatGoogleGenerativeAI,
-        model=configuration.get("model", "gemini-2.0-flash-lite"),
-        temperature=0,
-        google_api_key=os.getenv("GOOGLE_API_KEY")
+        ChatOllama,
+        model=configuration.get("model", "llama3:latest"),
+        temperature=0
     )
     
     prompt = ChatPromptTemplate.from_template(
@@ -76,40 +77,47 @@ async def decompose_question(state: MultiHopState, config: RunnableConfig) -> Di
         IMPORTANT: Only create sub-questions if the original question truly requires multiple steps. 
         If the question can be answered directly, create fewer, more focused sub-questions.
 
+        CRITICAL: You must respond with ONLY a valid JSON object. Do not include any explanations, comments, or additional text. Return ONLY the JSON.
+
         The user will provide a complex question, and you must generate a JSON object containing a list of sub-questions.
         Each sub-question should be answerable on its own and build upon the previous one.
 
         Examples:
         
         Question: "Which movie, directed by the person who directed 'Jaws', stars an actor born in the same city as that director?"
-        Output:
-        {{
-            "questions": [
-                "Who directed the movie 'Jaws'?",
-                "In which city was the director of 'Jaws' born?",
-                "Which major actor was born in that same city?",
-                "Which movie directed by the director of 'Jaws' stars that actor?"
-            ]
-        }}
+        Output: {{"questions": ["Who directed the movie 'Jaws'?", "In which city was the director of 'Jaws' born?", "Which major actor was born in that same city?", "Which movie directed by the director of 'Jaws' stars that actor?"]}}
 
         Question: "In which year was the actor who played Harry Potter born?"
-        Output:
-        {{
-            "questions": [
-                "Who played the character Harry Potter in the movies?",
-                "In what year was this actor born?"
-            ]
-        }}
+        Output: {{"questions": ["Who played the character Harry Potter in the movies?", "In what year was this actor born?"]}}
 
-        Now, decompose the following question:
+        Now, decompose the following question. Return ONLY the JSON object, no additional text:
         Question: {question}
-        """
+        
+        JSON Output:"""
     )
     
-    parser = JsonOutputParser()
+    parser = StrOutputParser()
     chain = prompt | llm | parser
     
-    result = await chain.ainvoke({"question": state["original_question"]})
+    raw_result = await chain.ainvoke({"question": state["original_question"]})
+    
+    # Clean the response to extract JSON
+    # Remove any text before the first { and after the last }
+    json_match = re.search(r'\{.*\}', raw_result.strip(), re.DOTALL)
+    if json_match:
+        json_str = json_match.group()
+        try:
+            result = json.loads(json_str)
+        except json.JSONDecodeError:
+            # Fallback: try to parse the entire response as JSON
+            try:
+                result = json.loads(raw_result.strip())
+            except json.JSONDecodeError:
+                # Last resort: create a simple single-question response
+                result = {"questions": [state["original_question"]]}
+    else:
+        # If no JSON found, treat the whole question as one question
+        result = {"questions": [state["original_question"]]}
     
     print(f"📝 Original: {state['original_question']}")
     print(f"🎯 Decomposed into {len(result['questions'])} sub-questions:")
@@ -142,21 +150,24 @@ async def rewrite_query(state: MultiHopState, config: RunnableConfig) -> Dict[st
         configuration = config.get("configurable", {})
         
         llm = await asyncio.to_thread(
-            ChatGoogleGenerativeAI,
-            model=configuration.get("model", "gemini-2.0-flash-lite"),
-            temperature=0,
-            google_api_key=os.getenv("GOOGLE_API_KEY")
+            ChatOllama,
+            model=configuration.get("model", "llama3:latest"),
+            temperature=0
         )
         
         prompt = ChatPromptTemplate.from_template(
-            """You are a query rewriting expert. Rewrite the follow-up question to be self-contained using previous answers.
+            """You are a query rewriting expert. Given previous answers and the current question, create a more specific and searchable query.
 
-            Previous facts:
-            {context}
-
+            Previous answers: {context}
             Current question: {question}
 
-            Rewrite this question to be specific and searchable, incorporating the known facts:
+            Instructions:
+            1. If you have specific information from previous answers, use it
+            2. If no relevant information exists, keep the original question or make it more general
+            3. Do NOT create hypothetical or nonsensical queries
+            4. Focus on finding factual information that can be retrieved
+
+            Return only the rewritten query, nothing else.
             """
         )
         chain = prompt | llm | StrOutputParser()
@@ -187,7 +198,7 @@ async def retrieve_documents(state: MultiHopState, config: RunnableConfig) -> Di
     
     print(f"📄 Retrieved: {len(docs)} documents")
     if docs:
-        print(f"📝 Preview: {docs[0].page_content[:1000]}...")
+        print(f"📝� Preview: {docs[0].page_content[:1000]}...")
     
     return {"retrieved_docs": docs}
 
@@ -202,38 +213,39 @@ async def generate_intermediate_answer(state: MultiHopState, config: RunnableCon
     
     print(f"❓ Answering Question {current_q_num}: {current_question}")
     print(f"📄 Context: {len(context)} characters")
-    if context:
-        print(f"📝 Context preview: {context[:1000]}...")
+    
+    if not context.strip():
+        print("⚠️  No context available - cannot answer this question")
+        answer = f"I don't have enough information in my knowledge base to answer: '{current_question}'"
     else:
-        print("⚠️  No context available!")
-    
-    configuration = config.get("configurable", {})
-    
-    llm = await asyncio.to_thread(
-        ChatGoogleGenerativeAI,
-        model=configuration.get("model", "gemini-2.0-flash-lite"),
-        temperature=0,
-        google_api_key=os.getenv("GOOGLE_API_KEY")
-    )
-    
-    prompt = ChatPromptTemplate.from_template(
-        """You are an expert answer generator. Based ONLY on the provided context, answer the following question.
+        print(f"📝 Context preview: {context[:1000]}...")
+        
+        configuration = config.get("configurable", {})
+        
+        llm = await asyncio.to_thread(
+            ChatOllama,
+            model=configuration.get("model", "llama3:latest"),
+            temperature=0
+        )
+        
+        prompt = ChatPromptTemplate.from_template(
+            """You are an expert answer generator. Based ONLY on the provided context, answer the following question.
 
-        IMPORTANT INSTRUCTIONS:
-        1. Extract the specific information requested from the context
-        2. If you find the answer, provide it clearly and concisely
-        3. If the answer is not in the context, say "The information is not available in the provided context"
-        4. Do not make assumptions or add information not in the context
+            IMPORTANT INSTRUCTIONS:
+            1. Extract the specific information requested from the context
+            2. If you find the answer, provide it clearly and concisely
+            3. If the answer is not in the context, say "The information is not available in the provided context"
+            4. Do not make assumptions or add information not in the context
 
-        Context:
-        {context}
+            Context:
+            {context}
 
-        Question: {question}
+            Question: {question}
 
-        Answer:"""
-    )
-    chain = prompt | llm | StrOutputParser()
-    answer = await chain.ainvoke({"context": context, "question": current_question})
+            Answer:"""
+        )
+        chain = prompt | llm | StrOutputParser()
+        answer = await chain.ainvoke({"context": context, "question": current_question})
     
     print(f"✅ Answer: {answer}")
     
@@ -258,11 +270,10 @@ async def generate_final_answer(state: MultiHopState, config: RunnableConfig) ->
     configuration = config.get("configurable", {})
     
     llm = await asyncio.to_thread(
-        ChatGoogleGenerativeAI,
-        model=configuration.get("model", "gemini-2.0-flash-lite"),
+        ChatOllama,
+        model=configuration.get("model", "llama3:latest"),
         temperature=configuration.get("temperature", 0.7),
-        max_output_tokens=configuration.get("max_tokens", 500),
-        google_api_key=os.getenv("GOOGLE_API_KEY")
+        num_predict=configuration.get("max_tokens", 500)
     )
     
     prompt = ChatPromptTemplate.from_template(
