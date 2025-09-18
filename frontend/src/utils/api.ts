@@ -74,7 +74,7 @@ export const sendChatMessage = async (
   message: string,
   model: string,
   onProgress?: (progress: string) => void
-): Promise<string> => {
+): Promise<{ final_answer: string; trace: any[] }> => {
   try {
     const assistantId = import.meta.env.VITE_ASSISTANT_ID;
     if (!assistantId) {
@@ -130,6 +130,7 @@ export const sendChatMessage = async (
     let buffer = '';
     let fullResponse = '';
     let lastState: any = {};
+    let lastTrace: any[] = [];
 
     try {
       while (true) {
@@ -155,6 +156,9 @@ export const sendChatMessage = async (
                 if (typeof chunkData === 'object') {
                   // Update state like Streamlit does
                   lastState = { ...lastState, ...chunkData };
+                  if (Array.isArray(chunkData.trace)) {
+                    lastTrace = chunkData.trace;
+                  }
 
                   // Check for final answer like Streamlit does
                   if (chunkData.final_answer) {
@@ -165,7 +169,7 @@ export const sendChatMessage = async (
                       onProgress(`✅ Final Answer: ${fullResponse}`);
                     }
 
-                    return fullResponse;
+                    return { final_answer: fullResponse, trace: lastTrace };
                   }
 
                   // Show progress updates like Streamlit does
@@ -195,7 +199,7 @@ export const sendChatMessage = async (
 
     // If we get here without finding a final answer, return the last known state
     if (fullResponse) {
-      return fullResponse;
+      return { final_answer: fullResponse, trace: lastTrace };
     }
 
     // Fallback: check final thread state
@@ -204,14 +208,14 @@ export const sendChatMessage = async (
       if (finalStateResponse.ok) {
         const finalState = await finalStateResponse.json();
         if (finalState.values?.final_answer) {
-          return finalState.values.final_answer;
+          return { final_answer: finalState.values.final_answer, trace: finalState.values?.trace || [] };
         }
       }
     } catch (error) {
       console.warn('Failed to get final state:', error);
     }
 
-    return "I apologize, but I couldn't generate a complete response. Please try again.";
+    return { final_answer: "I apologize, but I couldn't generate a complete response. Please try again.", trace: lastTrace };
 
   } catch (error) {
     console.error('[sendChatMessage] Error:', error);

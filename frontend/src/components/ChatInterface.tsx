@@ -9,12 +9,14 @@ import { Instructions } from './Instructions';
 import { ModelSelector } from './ModelSelector';
 import { useToast } from '@/hooks/use-toast';
 import { sendChatMessage, checkLangGraphStatus } from '@/utils/api';
+import TraceTimeline from './TraceTimeline';
 
 interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   timestamp: Date;
+  trace?: any[];
 }
 
 interface ChatSession {
@@ -148,7 +150,8 @@ const ChatInterface = () => {
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: response,
+        content: response.final_answer,
+        trace: response.trace,
         timestamp: new Date(),
       };
 
@@ -260,6 +263,9 @@ const ChatInterface = () => {
                         <div className="prose prose-invert max-w-none">
                           {msg.content}
                         </div>
+                        {msg.role === 'assistant' && Array.isArray(msg.trace) && msg.trace.length > 0 && (
+                          <TraceTimeline trace={msg.trace} />
+                        )}
                       </div>
                     </div>
                   </Card>

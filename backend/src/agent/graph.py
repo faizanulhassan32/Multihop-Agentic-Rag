@@ -33,6 +33,7 @@ class MultiHopState(TypedDict):
     rewritten_query: str
     current_question_index: int
     final_answer: str
+    trace: List[Dict[str, Any]]
 
 class RAGSystem:
     def __init__(self):
@@ -101,22 +102,17 @@ async def decompose_question(state: MultiHopState, config: RunnableConfig) -> Di
     
     raw_result = await chain.ainvoke({"question": state["original_question"]})
     
-    # Clean the response to extract JSON
-    # Remove any text before the first { and after the last }
     json_match = re.search(r'\{.*\}', raw_result.strip(), re.DOTALL)
     if json_match:
         json_str = json_match.group()
         try:
             result = json.loads(json_str)
         except json.JSONDecodeError:
-            # Fallback: try to parse the entire response as JSON
             try:
                 result = json.loads(raw_result.strip())
             except json.JSONDecodeError:
-                # Last resort: create a simple single-question response
                 result = {"questions": [state["original_question"]]}
     else:
-        # If no JSON found, treat the whole question as one question
         result = {"questions": [state["original_question"]]}
     
     print(f"📝 Original: {state['original_question']}")
@@ -124,10 +120,16 @@ async def decompose_question(state: MultiHopState, config: RunnableConfig) -> Di
     for i, q in enumerate(result['questions']):
         print(f"   {i+1}. {q}")
     
+    trace_entry = {
+        "step": "decompose_question",
+        "input": {"original_question": state["original_question"]},
+        "output": {"decomposed_questions": result["questions"]},
+    }
     return {
         "decomposed_questions": result["questions"],
         "current_question_index": 0,
         "intermediate_answers": [],
+        "trace": state.get("trace", []) + [trace_entry],
     }
 
 async def rewrite_query(state: MultiHopState, config: RunnableConfig) -> Dict[str, Any]:
@@ -145,7 +147,6 @@ async def rewrite_query(state: MultiHopState, config: RunnableConfig) -> Dict[st
         context = "\n".join(f"- {ans}" for ans in state["intermediate_answers"])
         
         print(f"🧠 Previous answers available: {len(state['intermediate_answers'])}")
-        print(f"📝 Context: {context[:1000]}..." if len(context) > 200 else f"📝 Context: {context}")
         
         configuration = config.get("configurable", {})
         
@@ -176,12 +177,21 @@ async def rewrite_query(state: MultiHopState, config: RunnableConfig) -> Dict[st
         print(f"🔄 Original: {current_question}")
         print(f"✨ Rewritten: {rewritten_question}")
         
-        return {"rewritten_query": rewritten_question}
+        trace_entry = {
+            "step": "rewrite_query",
+            "input": {"question": current_question, "previous_answers": state["intermediate_answers"]},
+            "output": {"rewritten_query": rewritten_question},
+        }
+        return {"rewritten_query": rewritten_question, "trace": state.get("trace", []) + [trace_entry]}
     else:
         print("ℹ️  No previous answers - using original question")
         print(f"➡️  Query: {current_question}")
-        
-    return {"rewritten_query": current_question}
+        trace_entry = {
+            "step": "rewrite_query",
+            "input": {"question": current_question, "previous_answers": []},
+            "output": {"rewritten_query": current_question},
+        }
+        return {"rewritten_query": current_question, "trace": state.get("trace", []) + [trace_entry]}
 
 async def retrieve_documents(state: MultiHopState, config: RunnableConfig) -> Dict[str, Any]:
     print("\n" + "="*50)
@@ -197,8 +207,6 @@ async def retrieve_documents(state: MultiHopState, config: RunnableConfig) -> Di
     docs = await rag_system.retrieve_documents(query)
     
     print(f"📄 Retrieved: {len(docs)} documents")
-    if docs:
-        print(f"📝� Preview: {docs[0].page_content[:1000]}...")
     
     return {"retrieved_docs": docs}
 
@@ -212,13 +220,11 @@ async def generate_intermediate_answer(state: MultiHopState, config: RunnableCon
     current_q_num = state["current_question_index"] + 1
     
     print(f"❓ Answering Question {current_q_num}: {current_question}")
-    print(f"📄 Context: {len(context)} characters")
     
     if not context.strip():
         print("⚠️  No context available - cannot answer this question")
         answer = f"I don't have enough information in my knowledge base to answer: '{current_question}'"
     else:
-        print(f"📝 Context preview: {context[:1000]}...")
         
         configuration = config.get("configurable", {})
         
@@ -250,10 +256,16 @@ async def generate_intermediate_answer(state: MultiHopState, config: RunnableCon
     print(f"✅ Answer: {answer}")
     
     new_answers = state["intermediate_answers"] + [f"The answer to '{current_question}' is: {answer}"]
+    trace_entry = {
+        "step": "generate_intermediate_answer",
+        "input": {"rewritten_query": current_question},
+        "output": {"answer": answer},
+    }
     
     return {
         "intermediate_answers": new_answers,
         "current_question_index": state["current_question_index"] + 1,
+        "trace": state.get("trace", []) + [trace_entry],
     }
 
 async def generate_final_answer(state: MultiHopState, config: RunnableConfig) -> Dict[str, Any]:
@@ -277,15 +289,18 @@ async def generate_final_answer(state: MultiHopState, config: RunnableConfig) ->
     )
     
     prompt = ChatPromptTemplate.from_template(
-        """You are a master synthesist. You have been provided with a series of facts that were gathered
-        to answer a complex user question. Combine these facts into a single, clear, and comprehensive answer.
+        """
+        You are a master synthesist. You have been provided with a series of facts that were gathered to answer a complex user question.
+        Combine these facts into a single, clear, and comprehensive answer.
+
+        IMPORTANT: Do NOT include any introductory, explanatory, or concluding phrases (such as 'Here is my conclusion', 'Based on the context', 'In summary', etc.).
+        Only provide the direct cumulative answer to the original question.
 
         Original Question: {original_question}
-
         Facts Gathered:
         {context}
 
-        Final Answer:
+        Final Answer (no extra text):
         """
     )
     chain = prompt | llm | StrOutputParser()
@@ -294,7 +309,12 @@ async def generate_final_answer(state: MultiHopState, config: RunnableConfig) ->
     print(f"� Final Answer: {final_answer}")
     print("="*50)
     
-    return {"final_answer": final_answer}
+    trace_entry = {
+        "step": "generate_final_answer",
+        "input": {"intermediate_answers": state["intermediate_answers"]},
+        "output": {"final_answer": final_answer},
+    }
+    return {"final_answer": final_answer, "trace": state.get("trace", []) + [trace_entry]}
 
 def should_continue(state: MultiHopState) -> Literal["rewrite_query", "generate_final_answer"]:
     current = state["current_question_index"]
