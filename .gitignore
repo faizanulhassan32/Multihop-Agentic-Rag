@@ -5,6 +5,7 @@ backend/.env
 backend/.venv
 backend/agent.egg-info
 backend/data
+backend/libs
 frontend/.env
 
 # Python cache files

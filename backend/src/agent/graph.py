@@ -1,4 +1,12 @@
 from __future__ import annotations
+import sys, os
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    def load_dotenv():
+        pass
+# Add local libs directory where langchain_core was installed via --target
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../libs')))
 
 import asyncio
 import os
@@ -14,8 +22,8 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableConfig
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 from langgraph.graph import StateGraph, END
-from langchain_chroma import Chroma
-from dotenv import load_dotenv
+from langchain_community.vectorstores import Chroma
+from .classifier import run_classifier
 load_dotenv()
 
 PERSIST_DIR = "./hotpot_QA_distractor_1k_ollama"
@@ -34,6 +42,10 @@ class MultiHopState(TypedDict):
     current_question_index: int
     final_answer: str
     trace: List[Dict[str, Any]]
+    # Supervisor fields
+    classification: str
+    classification_reason: str
+    worker_answer: str
 
 class RAGSystem:
     def __init__(self):
@@ -44,7 +56,7 @@ class RAGSystem:
         if self._vectorstore is None:
             self._vectorstore = Chroma(
                 persist_directory=PERSIST_DIR,
-                embedding_function=OllamaEmbeddings(model="nomic-embed-text:latest")
+                embedding_function=OllamaEmbeddings(model=Config.OLLAMA_EMBEDDING_MODEL)
             )
             self._retriever = self._vectorstore.as_retriever(search_kwargs={"k": 5})
 
@@ -316,6 +328,58 @@ async def generate_final_answer(state: MultiHopState, config: RunnableConfig) ->
     }
     return {"final_answer": final_answer, "trace": state.get("trace", []) + [trace_entry]}
 
+# ---------------------------------------------------------------------
+# Supervisor classification and routing nodes
+# ---------------------------------------------------------------------
+async def supervisor_classify(state: MultiHopState, config: RunnableConfig) -> Dict[str, Any]:
+    """Classify the incoming user query using the lightweight Ollama model.
+
+    Stores ``classification`` and ``classification_reason`` in the state.
+    """
+    question = state.get("original_question", "")
+    result = run_classifier(question)
+    return {
+        "classification": result.classification,
+        "classification_reason": result.reason,
+        "trace": state.get("trace", []) + [{"step": "supervisor_classify", "input": {"question": question}, "output": {"classification": result.classification, "reason": result.reason}}],
+    }
+
+async def out_of_scope(state: MultiHopState, config: RunnableConfig) -> Dict[str, Any]:
+    msg = "I’m sorry, I can only answer factual, multi‑hop knowledge questions."
+    return {"final_answer": msg, "trace": state.get("trace", []) + [{"step": "out_of_scope", "output": {"final_answer": msg}}]}
+
+async def prompt_injection(state: MultiHopState, config: RunnableConfig) -> Dict[str, Any]:
+    msg = "I’m sorry, I cannot process that request."
+    return {"final_answer": msg, "trace": state.get("trace", []) + [{"step": "prompt_injection", "output": {"final_answer": msg}}]}
+
+async def invalid_query(state: MultiHopState, config: RunnableConfig) -> Dict[str, Any]:
+    msg = "I’m sorry, the query appears to be invalid. Please re‑phrase."
+    return {"final_answer": msg, "trace": state.get("trace", []) + [{"step": "invalid_query", "output": {"final_answer": msg}}]}
+
+async def needs_clarification(state: MultiHopState, config: RunnableConfig) -> Dict[str, Any]:
+    msg = "I need a little more clarification before I can answer. Could you elaborate?"
+    return {"final_answer": msg, "trace": state.get("trace", []) + [{"step": "needs_clarification", "output": {"final_answer": msg}}]}
+
+async def supervisor_finalize(state: MultiHopState, config: RunnableConfig) -> Dict[str, Any]:
+    # Preserve the worker's answer, sanity‑check, and expose as final_answer
+    worker_ans = state.get("final_answer", "")
+    if not worker_ans:
+        worker_ans = "[No answer generated]"
+    return {"final_answer": worker_ans, "worker_answer": worker_ans, "trace": state.get("trace", []) + [{"step": "supervisor_finalize", "output": {"final_answer": worker_ans}}]}
+
+def route_based_on_classification(state: MultiHopState) -> Literal["decompose_question", "out_of_scope", "prompt_injection", "invalid_query", "needs_clarification"]:
+    label = state.get("classification", "invalid")
+    mapping = {
+        "in_scope": "decompose_question",
+        "out_of_scope": "out_of_scope",
+        "prompt_injection": "prompt_injection",
+        "invalid": "invalid_query",
+        "needs_clarification": "needs_clarification",
+    }
+    return mapping.get(label, "invalid_query")
+
+
+
 def should_continue(state: MultiHopState) -> Literal["rewrite_query", "generate_final_answer"]:
     current = state["current_question_index"]
     total = len(state["decomposed_questions"])
@@ -326,25 +390,52 @@ def should_continue(state: MultiHopState) -> Literal["rewrite_query", "generate_
 
 workflow = StateGraph(MultiHopState, config_schema=Configuration)
 
+# Supervisor nodes
+workflow.add_node("supervisor_classify", supervisor_classify)
+workflow.add_node("out_of_scope", out_of_scope)
+workflow.add_node("prompt_injection", prompt_injection)
+workflow.add_node("invalid_query", invalid_query)
+workflow.add_node("needs_clarification", needs_clarification)
+workflow.add_node("supervisor_finalize", supervisor_finalize)
+
+# Existing RAG nodes
 workflow.add_node("decompose_question", decompose_question)
 workflow.add_node("rewrite_query", rewrite_query)
 workflow.add_node("retrieve_documents", retrieve_documents)
 workflow.add_node("generate_intermediate_answer", generate_intermediate_answer)
 workflow.add_node("generate_final_answer", generate_final_answer)
 
-workflow.set_entry_point("decompose_question")
+# Entry point is supervisor classification
+workflow.set_entry_point("supervisor_classify")
+
+# Routing from classifier to appropriate next step
+workflow.add_conditional_edges(
+    "supervisor_classify",
+    route_based_on_classification,
+    {
+        "decompose_question": "decompose_question",
+        "out_of_scope": "out_of_scope",
+        "prompt_injection": "prompt_injection",
+        "invalid_query": "invalid_query",
+        "needs_clarification": "needs_clarification",
+    },
+)
+
+# Normal RAG flow
 workflow.add_edge("decompose_question", "rewrite_query")
 workflow.add_edge("rewrite_query", "retrieve_documents")
 workflow.add_edge("retrieve_documents", "generate_intermediate_answer")
-
 workflow.add_conditional_edges(
     "generate_intermediate_answer",
     should_continue,
     {
         "rewrite_query": "rewrite_query",
-        "generate_final_answer": "generate_final_answer"
-    }
+        "generate_final_answer": "generate_final_answer",
+    },
 )
-workflow.add_edge("generate_final_answer", END)
+# After final answer, go through supervisor finalization
+workflow.add_edge("generate_final_answer", "supervisor_finalize")
+workflow.add_edge("supervisor_finalize", END)
 
+# Compile graph
 graph = workflow.compile(name="multi-hop-agent")

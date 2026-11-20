@@ -1,9 +1,6 @@
 import os
 from pathlib import Path
-try:
-    from dotenv import load_dotenv
-except ImportError:
-    load_dotenv = lambda **kwargs: None
+from dotenv import load_dotenv
 
 # Load .env from the backend directory (backend/.env)
 env_path = Path(__file__).resolve().parents[2] / ".env"
@@ -19,7 +16,10 @@ class Config:
 
     # Ollama configuration
     OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    OLLAMA_CLASSIFIER_MODEL = os.getenv("OLLAMA_CLASSIFIER_MODEL", "qwen2.5:1.5b")
+    OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "llama3:latest")
     OLLAMA_EMBEDDING_MODEL = os.getenv("OLLAMA_EMBEDDING_MODEL", "nomic-embed-text:latest")
+
 
     # Chroma configuration
     CHROMA_PERSIST_DIR = os.getenv(
