@@ -22,11 +22,10 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableConfig
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 from langgraph.graph import StateGraph, END
-from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
 from .classifier import run_classifier
+from ingestion.config import Config
 load_dotenv()
-
-PERSIST_DIR = "./hotpot_QA_distractor_1k_ollama"
 
 class Configuration(TypedDict):
     model: str
@@ -55,8 +54,12 @@ class RAGSystem:
     def _initialize_if_needed(self):
         if self._vectorstore is None:
             self._vectorstore = Chroma(
-                persist_directory=PERSIST_DIR,
-                embedding_function=OllamaEmbeddings(model=Config.OLLAMA_EMBEDDING_MODEL)
+                persist_directory=Config.CHROMA_PERSIST_DIR,
+                embedding_function=OllamaEmbeddings(
+                    base_url=Config.OLLAMA_BASE_URL,
+                    model=Config.OLLAMA_EMBEDDING_MODEL,
+                ),
+                collection_name=Config.CHROMA_COLLECTION_NAME,
             )
             self._retriever = self._vectorstore.as_retriever(search_kwargs={"k": 5})
 
@@ -66,8 +69,8 @@ class RAGSystem:
             docs = await asyncio.to_thread(self._retriever.invoke, query)
             return docs
         except Exception as e:
-            print(f"❌ RETRIEVAL ERROR: {e}")
-            return []
+            print(f"❌ RETRIEVAL ERROR: {type(e).__name__}: {e}")
+            raise e
 
 rag_system = RAGSystem()
 
