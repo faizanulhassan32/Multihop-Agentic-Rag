@@ -2,6 +2,9 @@ backend/.langgraph_api
 backend/hotpot_QA_distractor_10k
 backend/hotpot_QA_distractor_1k_ollama
 backend/.env
+backend/.venv
+backend/agent.egg-info
+backend/data
 frontend/.env
 
 # Python cache files
