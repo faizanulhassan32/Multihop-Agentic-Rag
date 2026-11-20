@@ -138,26 +138,55 @@ const ChatInterface = () => {
     setIsLoading(true);
     setProgressMessage('🕵️‍♂️ The agent is on the case... This might take a moment.');
 
+    const assistantMsgId = (Date.now() + 1).toString();
+    let accumulatedText = '';
+
     try {
       const response = await sendChatMessage(
         userMessage.content, 
         selectedModel,
         (progress: string) => {
           setProgressMessage(progress);
+        },
+        (token: string) => {
+          accumulatedText += token;
+          setCurrentSession(prev => {
+            if (!prev) return prev;
+            const existingIdx = prev.messages.findIndex(m => m.id === assistantMsgId);
+            if (existingIdx !== -1) {
+              const updatedMsgs = [...prev.messages];
+              updatedMsgs[existingIdx] = {
+                ...updatedMsgs[existingIdx],
+                content: accumulatedText,
+              };
+              return { ...prev, messages: updatedMsgs };
+            } else {
+              const newAssistantMsg: Message = {
+                id: assistantMsgId,
+                role: 'assistant',
+                content: accumulatedText,
+                timestamp: new Date(),
+              };
+              return { ...prev, messages: [...prev.messages, newAssistantMsg] };
+            }
+          });
         }
       );
       
-      const assistantMessage: Message = {
-        id: (Date.now() + 1).toString(),
+      const finalAssistantMessage: Message = {
+        id: assistantMsgId,
         role: 'assistant',
-        content: response.final_answer,
+        content: response.final_answer || accumulatedText,
         trace: response.trace,
         timestamp: new Date(),
       };
 
       const finalSession = {
         ...updatedSession,
-        messages: [...updatedSession.messages, assistantMessage],
+        messages: [
+          ...updatedSession.messages.filter(m => m.id !== assistantMsgId),
+          finalAssistantMessage
+        ],
         lastUpdated: new Date(),
       };
 

@@ -85,30 +85,7 @@ def _build_structured_classifier():
     )
 
 
-def run_classifier(question: str) -> ClassificationResult:
-    """Classify a user question using Ollama native JSON schema structured outputs.
-
-    Validates that the output matches ClassificationResult. Fails closed to an
-    'invalid' classification if any error occurs so unclassified queries never
-    enter the RAG workflow.
-    """
-    if not question or not question.strip():
-        return ClassificationResult(classification="invalid", reason="empty_query")
-
-    system_prompt = _get_classification_system_prompt()
-    structured_classifier = _build_structured_classifier()
-
-    messages = [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=question),
-    ]
-
-    try:
-        result: Dict[str, Any] = structured_classifier.invoke(messages)
-    except Exception as exc:
-        logger.error("Classifier connection or model invocation failed: %s", exc)
-        return ClassificationResult(classification="invalid", reason="classifier_connection_error")
-
+def _parse_classifier_result(result: Dict[str, Any]) -> ClassificationResult:
     if result.get("parsing_error") is not None:
         logger.error(
             "Classifier structured-output validation failed: %s",
@@ -122,3 +99,42 @@ def run_classifier(question: str) -> ClassificationResult:
         return ClassificationResult(classification="invalid", reason="invalid_result_instance")
 
     return parsed
+
+
+def _classifier_messages(question: str) -> list:
+    return [
+        SystemMessage(content=_get_classification_system_prompt()),
+        HumanMessage(content=question),
+    ]
+
+
+def run_classifier(question: str) -> ClassificationResult:
+    """Synchronously classify a question for non-async callers and existing tests."""
+    if not question or not question.strip():
+        return ClassificationResult(classification="invalid", reason="empty_query")
+
+    try:
+        result: Dict[str, Any] = _build_structured_classifier().invoke(
+            _classifier_messages(question)
+        )
+    except Exception as exc:
+        logger.error("Classifier connection or model invocation failed: %s", exc)
+        return ClassificationResult(classification="invalid", reason="classifier_connection_error")
+
+    return _parse_classifier_result(result)
+
+
+async def arun_classifier(question: str) -> ClassificationResult:
+    """Asynchronously classify a question so model I/O does not block the event loop."""
+    if not question or not question.strip():
+        return ClassificationResult(classification="invalid", reason="empty_query")
+
+    try:
+        result: Dict[str, Any] = await _build_structured_classifier().ainvoke(
+            _classifier_messages(question)
+        )
+    except Exception as exc:
+        logger.error("Classifier connection or network request failed: %s", exc)
+        return ClassificationResult(classification="invalid", reason="classifier_connection_error")
+
+    return _parse_classifier_result(result)

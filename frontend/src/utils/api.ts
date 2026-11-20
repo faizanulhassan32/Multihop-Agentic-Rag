@@ -73,7 +73,8 @@ export const checkLangGraphStatus = async (): Promise<boolean> => {
 export const sendChatMessage = async (
   message: string,
   model: string,
-  onProgress?: (progress: string) => void
+  onProgress?: (progress: string) => void,
+  onToken?: (token: string) => void
 ): Promise<{ final_answer: string; trace: any[] }> => {
   try {
     const assistantId = import.meta.env.VITE_ASSISTANT_ID;
@@ -149,40 +150,35 @@ export const sendChatMessage = async (
             if (line.startsWith('data: ')) {
               const data = JSON.parse(line.slice(6));
 
-              // Handle different event types like Streamlit does
+              // Handle token streaming events incrementally
+              if (data.event === 'token' && data.data?.token) {
+                const token = data.data.token;
+                fullResponse += token;
+                if (onToken) {
+                  onToken(token);
+                }
+              }
+
+              // Handle status progress events
+              if (data.event === 'progress' && data.data?.message) {
+                if (onProgress) {
+                  onProgress(data.data.message);
+                }
+              }
+
+              // Handle state updates and final answer completion
               if (data.event === 'values' && data.data) {
                 const chunkData = data.data;
 
                 if (typeof chunkData === 'object') {
-                  // Update state like Streamlit does
                   lastState = { ...lastState, ...chunkData };
                   if (Array.isArray(chunkData.trace)) {
                     lastTrace = chunkData.trace;
                   }
 
-                  // Check for final answer like Streamlit does
                   if (chunkData.final_answer) {
                     fullResponse = chunkData.final_answer;
-
-                    // Update progress if callback provided
-                    if (onProgress) {
-                      onProgress(`✅ Final Answer: ${fullResponse}`);
-                    }
-
                     return { final_answer: fullResponse, trace: lastTrace };
-                  }
-
-                  // Show progress updates like Streamlit does
-                  if (onProgress && chunkData.decomposed_questions?.length > 0) {
-                    const currentStep = (chunkData.current_question_index || 0) + 1;
-                    const totalSteps = chunkData.decomposed_questions.length;
-                    onProgress(`🧠 Decomposed into ${totalSteps} questions. Processing step ${currentStep}/${totalSteps}...`);
-                  }
-
-                  if (onProgress && chunkData.intermediate_answers?.length > 0) {
-                    const answers = chunkData.intermediate_answers;
-                    const latestAnswer = answers[answers.length - 1];
-                    onProgress(`💭 Gathering information: ${latestAnswer.substring(0, 100)}...`);
                   }
                 }
               }

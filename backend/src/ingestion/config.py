@@ -34,3 +34,11 @@ class Config:
 
     # Batch processing
     EMBEDDING_BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "32"))
+
+    # Execution limits & Low-latency parameters
+    MAX_SUB_QUESTIONS = int(os.getenv("MAX_SUB_QUESTIONS", "3"))
+    MAX_FOLLOWUP_ROUNDS = int(os.getenv("MAX_FOLLOWUP_ROUNDS", "1"))
+    MAX_FOLLOWUP_QUERIES = int(os.getenv("MAX_FOLLOWUP_QUERIES", "3"))
+    RETRIEVAL_TOP_K = int(os.getenv("RETRIEVAL_TOP_K", "4"))
+    MAX_RETRIEVAL_CONCURRENCY = int(os.getenv("MAX_RETRIEVAL_CONCURRENCY", "3"))
+    MODEL_TIMEOUT = float(os.getenv("MODEL_TIMEOUT", "60.0"))
