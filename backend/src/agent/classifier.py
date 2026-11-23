@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, Literal
+from typing import Literal
 
-from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_ollama import ChatOllama
-from pydantic import BaseModel, ConfigDict, Field
+from ollama import AsyncClient
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from ingestion.config import Config
 
@@ -72,20 +71,7 @@ def _get_classification_system_prompt() -> str:
     return base
 
 
-def _build_structured_classifier():
-    classifier_llm = ChatOllama(
-        model=Config.OLLAMA_CLASSIFIER_MODEL,
-        base_url=Config.OLLAMA_BASE_URL,
-        temperature=0,
-    )
-    return classifier_llm.with_structured_output(
-        ClassificationResult,
-        method="json_schema",
-        include_raw=True,
-    )
-
-
-def run_classifier(question: str) -> ClassificationResult:
+async def run_classifier(question: str) -> ClassificationResult:
     """Classify a user question using Ollama native JSON schema structured outputs.
 
     Validates that the output matches ClassificationResult. Fails closed to an
@@ -96,29 +82,26 @@ def run_classifier(question: str) -> ClassificationResult:
         return ClassificationResult(classification="invalid", reason="empty_query")
 
     system_prompt = _get_classification_system_prompt()
-    structured_classifier = _build_structured_classifier()
-
-    messages = [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=question),
-    ]
-
     try:
-        result: Dict[str, Any] = structured_classifier.invoke(messages)
+        async with AsyncClient(host=Config.OLLAMA_BASE_URL) as client:
+            response = await client.chat(
+                model=Config.OLLAMA_CLASSIFIER_MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": question},
+                ],
+                format=ClassificationResult.model_json_schema(),
+                options={"temperature": 0},
+            )
     except Exception as exc:
         logger.error("Classifier connection or model invocation failed: %s", exc)
         return ClassificationResult(classification="invalid", reason="classifier_connection_error")
 
-    if result.get("parsing_error") is not None:
+    try:
+        return ClassificationResult.model_validate_json(response.message.content)
+    except ValidationError as exc:
         logger.error(
             "Classifier structured-output validation failed: %s",
-            result["parsing_error"],
+            exc,
         )
         return ClassificationResult(classification="invalid", reason="structured_output_validation_error")
-
-    parsed = result.get("parsed")
-    if not isinstance(parsed, ClassificationResult):
-        logger.error("Classifier did not return a valid ClassificationResult instance: %s", parsed)
-        return ClassificationResult(classification="invalid", reason="invalid_result_instance")
-
-    return parsed

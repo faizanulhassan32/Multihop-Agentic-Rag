@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from langchain_chroma import Chroma
 
+from agent.hybrid_retriever import _retrieve_dense
 from src.ingestion import build_vectorstore as vectorstore_module
 from src.ingestion.build_bm25_index import build_bm25_index, get_bm25_ids, search_bm25
 from src.ingestion.config import Config
@@ -99,8 +100,11 @@ class TestIndexSynchronization(unittest.TestCase):
             self.assertEqual(chroma_ids, expected_updated_ids)
             self.assertEqual(get_bm25_ids(self.db_path), expected_updated_ids)
 
-            dense_results = store.similarity_search("eruption plume", k=1)
+            dense_results = _retrieve_dense(store, "eruption plume", limit=1)
             self.assertEqual(dense_results[0].page_content, updated[1]["content"])
+            self.assertEqual(
+                dense_results[0].metadata["id"], "audit_volcano_chunk_0"
+            )
             self.assertEqual(dense_results[0].metadata["title"], "Volcano")
             self.assertEqual(dense_results[0].metadata["source"], "isolated-test")
             sparse_results = search_bm25("eruption plume", db_path=self.db_path)

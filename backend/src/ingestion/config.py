@@ -34,6 +34,12 @@ class Config:
         str(Path(__file__).resolve().parents[2] / "data" / "bm25" / "index.sqlite3"),
     )
 
+    # Hybrid retrieval configuration
+    DENSE_RETRIEVAL_K = int(os.getenv("DENSE_RETRIEVAL_K", "10"))
+    BM25_RETRIEVAL_K = int(os.getenv("BM25_RETRIEVAL_K", "10"))
+    HYBRID_RETRIEVAL_K = int(os.getenv("HYBRID_RETRIEVAL_K", "5"))
+    RRF_K = int(os.getenv("RRF_K", "60"))
+
     # Text splitting configuration
     CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "1000"))  # characters
     CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "150"))

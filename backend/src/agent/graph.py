@@ -11,19 +11,21 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../l
 import asyncio
 import os
 import warnings
-import json
-import re
+from pathlib import Path
 from typing import List, TypedDict, Any, Dict, Literal
 
 from langchain_core.documents import Document
 from langchain_core.messages import BaseMessage
-from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
+from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableConfig
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 from langgraph.graph import StateGraph, END
 from langchain_chroma import Chroma
+from ollama import AsyncClient
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from .classifier import run_classifier
+from .hybrid_retriever import hybrid_search
 from ingestion.config import Config
 load_dotenv()
 
@@ -31,6 +33,22 @@ class Configuration(TypedDict):
     model: str
     temperature: float
     max_tokens: int
+
+class QuestionDecomposition(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    questions: List[str] = Field(
+        min_length=1,
+        description="Ordered, independently answerable sub-questions needed to answer the original question.",
+    )
+
+    @field_validator("questions")
+    @classmethod
+    def require_nonempty_questions(cls, questions: List[str]) -> List[str]:
+        normalized = [question.strip() for question in questions]
+        if any(not question for question in normalized):
+            raise ValueError("Questions must not be empty.")
+        return normalized
 
 class MultiHopState(TypedDict):
     original_question: str
@@ -49,7 +67,6 @@ class MultiHopState(TypedDict):
 class RAGSystem:
     def __init__(self):
         self._vectorstore = None
-        self._retriever = None
     
     def _initialize_if_needed(self):
         if self._vectorstore is None:
@@ -61,16 +78,22 @@ class RAGSystem:
                 ),
                 collection_name=Config.CHROMA_COLLECTION_NAME,
             )
-            self._retriever = self._vectorstore.as_retriever(search_kwargs={"k": 5})
 
     async def retrieve_documents(self, query: str) -> List[Document]:
         try:
             self._initialize_if_needed()
-            docs = await asyncio.to_thread(self._retriever.invoke, query)
-            return docs
+            return await hybrid_search(
+                query=query,
+                vectorstore=self._vectorstore,
+                dense_limit=Config.DENSE_RETRIEVAL_K,
+                bm25_limit=Config.BM25_RETRIEVAL_K,
+                result_limit=Config.HYBRID_RETRIEVAL_K,
+                rrf_constant=Config.RRF_K,
+                bm25_db_path=Path(Config.BM25_DB_PATH),
+            )
         except Exception as e:
             print(f"❌ RETRIEVAL ERROR: {type(e).__name__}: {e}")
-            raise e
+            raise
 
 rag_system = RAGSystem()
 
@@ -80,12 +103,6 @@ async def decompose_question(state: MultiHopState, config: RunnableConfig) -> Di
     print("="*50)
     
     configuration = config.get("configurable", {})
-    
-    llm = await asyncio.to_thread(
-        ChatOllama,
-        model=configuration.get("model", "llama3:latest"),
-        temperature=0
-    )
     
     prompt = ChatPromptTemplate.from_template(
         """You are an expert at breaking down complex questions into a sequence of simpler questions.
@@ -111,37 +128,32 @@ async def decompose_question(state: MultiHopState, config: RunnableConfig) -> Di
         
         JSON Output:"""
     )
-    
-    parser = StrOutputParser()
-    chain = prompt | llm | parser
-    
-    raw_result = await chain.ainvoke({"question": state["original_question"]})
-    
-    json_match = re.search(r'\{.*\}', raw_result.strip(), re.DOTALL)
-    if json_match:
-        json_str = json_match.group()
-        try:
-            result = json.loads(json_str)
-        except json.JSONDecodeError:
-            try:
-                result = json.loads(raw_result.strip())
-            except json.JSONDecodeError:
-                result = {"questions": [state["original_question"]]}
-    else:
-        result = {"questions": [state["original_question"]]}
-    
+
+    prompt_text = prompt.format(question=state["original_question"])
+    async with AsyncClient(host=Config.OLLAMA_BASE_URL) as client:
+        response = await client.chat(
+            model=configuration.get("model", "llama3:latest"),
+            messages=[{"role": "user", "content": prompt_text}],
+            format=QuestionDecomposition.model_json_schema(),
+            options={"temperature": 0},
+        )
+    try:
+        result = QuestionDecomposition.model_validate_json(response.message.content)
+    except ValidationError as exc:
+        raise ValueError("Ollama returned an invalid question decomposition.") from exc
+
     print(f"📝 Original: {state['original_question']}")
-    print(f"🎯 Decomposed into {len(result['questions'])} sub-questions:")
-    for i, q in enumerate(result['questions']):
+    print(f"🎯 Decomposed into {len(result.questions)} sub-questions:")
+    for i, q in enumerate(result.questions):
         print(f"   {i+1}. {q}")
     
     trace_entry = {
         "step": "decompose_question",
         "input": {"original_question": state["original_question"]},
-        "output": {"decomposed_questions": result["questions"]},
+        "output": {"decomposed_questions": result.questions},
     }
     return {
-        "decomposed_questions": result["questions"],
+        "decomposed_questions": result.questions,
         "current_question_index": 0,
         "intermediate_answers": [],
         "trace": state.get("trace", []) + [trace_entry],
@@ -168,6 +180,7 @@ async def rewrite_query(state: MultiHopState, config: RunnableConfig) -> Dict[st
         llm = await asyncio.to_thread(
             ChatOllama,
             model=configuration.get("model", "llama3:latest"),
+            base_url=Config.OLLAMA_BASE_URL,
             temperature=0
         )
         
@@ -246,6 +259,7 @@ async def generate_intermediate_answer(state: MultiHopState, config: RunnableCon
         llm = await asyncio.to_thread(
             ChatOllama,
             model=configuration.get("model", "llama3:latest"),
+            base_url=Config.OLLAMA_BASE_URL,
             temperature=0
         )
         
@@ -296,13 +310,6 @@ async def generate_final_answer(state: MultiHopState, config: RunnableConfig) ->
 
     configuration = config.get("configurable", {})
     
-    llm = await asyncio.to_thread(
-        ChatOllama,
-        model=configuration.get("model", "llama3:latest"),
-        temperature=configuration.get("temperature", 0.7),
-        num_predict=configuration.get("max_tokens", 500)
-    )
-    
     prompt = ChatPromptTemplate.from_template(
         """
         You are a master synthesist. You have been provided with a series of facts that were gathered to answer a complex user question.
@@ -318,8 +325,23 @@ async def generate_final_answer(state: MultiHopState, config: RunnableConfig) ->
         Final Answer (no extra text):
         """
     )
-    chain = prompt | llm | StrOutputParser()
-    final_answer = await chain.ainvoke({"context": context, "original_question": original_question})
+    prompt_text = prompt.format(context=context, original_question=original_question)
+    answer_chunks = []
+    async with AsyncClient(host=Config.OLLAMA_BASE_URL) as client:
+        response_stream = await client.chat(
+            model=configuration.get("model", "llama3:latest"),
+            messages=[{"role": "user", "content": prompt_text}],
+            options={
+                "temperature": configuration.get("temperature", 0.7),
+                "num_predict": configuration.get("max_tokens", 500),
+            },
+            stream=True,
+        )
+        async for response_chunk in response_stream:
+            token = response_chunk.message.content
+            if token:
+                answer_chunks.append(token)
+    final_answer = "".join(answer_chunks)
     
     print(f"� Final Answer: {final_answer}")
     print("="*50)
@@ -340,7 +362,7 @@ async def supervisor_classify(state: MultiHopState, config: RunnableConfig) -> D
     Stores ``classification`` and ``classification_reason`` in the state.
     """
     question = state.get("original_question", "")
-    result = run_classifier(question)
+    result = await run_classifier(question)
     return {
         "classification": result.classification,
         "classification_reason": result.reason,
