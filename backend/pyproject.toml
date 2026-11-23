@@ -30,7 +30,10 @@ dependencies = [
     "chromadb==0.4.22",
     "ollama==0.6.3",
     "langchain-ollama>=0.1,<0.2",
+    "langchain-chroma==0.1.4",
     "python-dotenv>=0.21",
+    "datasets==3.6.0",
+    "pyarrow==19.0.1",
 ]
 
 [tool.setuptools]

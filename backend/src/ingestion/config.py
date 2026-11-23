@@ -28,6 +28,12 @@ class Config:
     )
     CHROMA_COLLECTION_NAME = os.getenv("CHROMA_COLLECTION_NAME", "hotpotqa_distractor_500")
 
+    # BM25 configuration (independent of the dataset and Chroma paths)
+    BM25_DB_PATH = os.getenv(
+        "BM25_DB_PATH",
+        str(Path(__file__).resolve().parents[2] / "data" / "bm25" / "index.sqlite3"),
+    )
+
     # Text splitting configuration
     CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "1000"))  # characters
     CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "150"))
