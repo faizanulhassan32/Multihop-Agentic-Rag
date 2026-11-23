@@ -1,0 +1,1 @@
+"""Standalone BGE reranker service."""

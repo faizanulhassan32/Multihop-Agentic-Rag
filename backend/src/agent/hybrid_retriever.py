@@ -1,14 +1,21 @@
 import asyncio
 import logging
+import time
+from datetime import datetime
 from pathlib import Path
 from typing import List, Sequence
 
 from langchain_core.documents import Document
 
 from ingestion.build_bm25_index import search_bm25
+from services.reranker_client import RerankerClient
 
 
 logger = logging.getLogger(__name__)
+
+
+def _timestamp() -> str:
+    return datetime.now().astimezone().isoformat(timespec="milliseconds")
 
 
 def _document_id(document: Document) -> str:
@@ -50,46 +57,88 @@ def reciprocal_rank_fusion(
     return [documents[document_id] for document_id in ranked_ids[:result_limit]]
 
 
-def _retrieve_dense(vectorstore, query: str, limit: int) -> List[Document]:
+def _retrieve_dense(
+    vectorstore, query: str, limit: int, request_id: str = "unknown"
+) -> List[Document]:
     """Query Chroma directly so each returned document retains its Chroma ID."""
-    if limit <= 0:
-        return []
-    embedding_function = vectorstore._embedding_function
-    if embedding_function is None:
-        raise RuntimeError("Chroma dense retrieval has no embedding function configured.")
-
-    query_embedding = embedding_function.embed_query(query)
-    results = vectorstore._collection.query(
-        query_embeddings=[query_embedding],
-        n_results=limit,
-        include=["documents", "metadatas"],
+    started_at = time.perf_counter()
+    documents: List[Document] = []
+    print(
+        f"[backend] timestamp={_timestamp()} request={request_id} "
+        f"stage=dense_retrieval "
+        f"event=started limit={limit}",
+        flush=True,
     )
-    ids = results["ids"][0]
-    contents = results["documents"][0]
-    metadatas = results["metadatas"][0]
-    if not (len(ids) == len(contents) == len(metadatas)):
-        raise RuntimeError("Chroma returned misaligned IDs, documents, and metadata.")
+    try:
+        if limit <= 0:
+            return documents
+        embedding_function = vectorstore._embedding_function
+        if embedding_function is None:
+            raise RuntimeError("Chroma dense retrieval has no embedding function configured.")
 
-    documents = []
-    for document_id, content, metadata in zip(ids, contents, metadatas):
-        if not isinstance(document_id, str) or not document_id:
-            raise RuntimeError("Chroma returned a document without a stable string ID.")
-        if not isinstance(content, str):
-            raise RuntimeError(f"Chroma returned no content for document {document_id!r}.")
-        document_metadata = dict(metadata or {})
-        document_metadata["id"] = document_id
-        documents.append(Document(page_content=content, metadata=document_metadata))
-    return documents
+        query_embedding = embedding_function.embed_query(query)
+        results = vectorstore._collection.query(
+            query_embeddings=[query_embedding],
+            n_results=limit,
+            include=["documents", "metadatas"],
+        )
+        ids = results["ids"][0]
+        contents = results["documents"][0]
+        metadatas = results["metadatas"][0]
+        if not (len(ids) == len(contents) == len(metadatas)):
+            raise RuntimeError("Chroma returned misaligned IDs, documents, and metadata.")
+
+        for document_id, content, metadata in zip(ids, contents, metadatas):
+            if not isinstance(document_id, str) or not document_id:
+                raise RuntimeError("Chroma returned a document without a stable string ID.")
+            if not isinstance(content, str):
+                raise RuntimeError(
+                    f"Chroma returned no content for document {document_id!r}."
+                )
+            document_metadata = dict(metadata or {})
+            document_metadata["id"] = document_id
+            documents.append(
+                Document(page_content=content, metadata=document_metadata)
+            )
+        return documents
+    finally:
+        elapsed_ms = (time.perf_counter() - started_at) * 1000
+        print(
+            f"[backend] timestamp={_timestamp()} request={request_id} "
+            f"stage=dense_retrieval "
+            f"event=completed candidates={len(documents)} elapsed_ms={elapsed_ms:.2f}",
+            flush=True,
+        )
 
 
-def _retrieve_bm25(query: str, limit: int, db_path: Path) -> List[Document]:
-    results = search_bm25(query, limit=limit, db_path=db_path)
-    documents = []
-    for result in results:
-        metadata = dict(result["metadata"])
-        metadata["id"] = result["id"]
-        documents.append(Document(page_content=result["content"], metadata=metadata))
-    return documents
+def _retrieve_bm25(
+    query: str, limit: int, db_path: Path, request_id: str = "unknown"
+) -> List[Document]:
+    started_at = time.perf_counter()
+    documents: List[Document] = []
+    print(
+        f"[backend] timestamp={_timestamp()} request={request_id} "
+        f"stage=bm25_retrieval "
+        f"event=started limit={limit}",
+        flush=True,
+    )
+    try:
+        results = search_bm25(query, limit=limit, db_path=db_path)
+        for result in results:
+            metadata = dict(result["metadata"])
+            metadata["id"] = result["id"]
+            documents.append(
+                Document(page_content=result["content"], metadata=metadata)
+            )
+        return documents
+    finally:
+        elapsed_ms = (time.perf_counter() - started_at) * 1000
+        print(
+            f"[backend] timestamp={_timestamp()} request={request_id} "
+            f"stage=bm25_retrieval "
+            f"event=completed candidates={len(documents)} elapsed_ms={elapsed_ms:.2f}",
+            flush=True,
+        )
 
 
 async def hybrid_search(
@@ -100,18 +149,27 @@ async def hybrid_search(
     result_limit: int,
     rrf_constant: int,
     bm25_db_path: Path,
+    reranker_client: RerankerClient | None = None,
+    rerank_limit: int = 5,
+    request_id: str = "unknown",
 ) -> List[Document]:
-    """Run dense and sparse retrieval concurrently, then fuse their ranked results."""
+    """Run dense and sparse retrieval, fuse candidates, and optionally rerank them."""
     if dense_limit <= 0 or bm25_limit <= 0:
         raise ValueError("Dense and BM25 candidate limits must be greater than zero.")
     if result_limit < 0:
         raise ValueError("result_limit must not be negative.")
     if rrf_constant <= 0:
         raise ValueError("rrf_constant must be greater than zero.")
+    if rerank_limit <= 0:
+        raise ValueError("rerank_limit must be greater than zero.")
 
     dense_result, bm25_result = await asyncio.gather(
-        asyncio.to_thread(_retrieve_dense, vectorstore, query, dense_limit),
-        asyncio.to_thread(_retrieve_bm25, query, bm25_limit, bm25_db_path),
+        asyncio.to_thread(
+            _retrieve_dense, vectorstore, query, dense_limit, request_id
+        ),
+        asyncio.to_thread(
+            _retrieve_bm25, query, bm25_limit, bm25_db_path, request_id
+        ),
         return_exceptions=True,
     )
 
@@ -146,9 +204,65 @@ async def hybrid_search(
         )
         bm25_result = []
 
-    return reciprocal_rank_fusion(
+    rrf_started = time.perf_counter()
+    print(
+        f"[backend] timestamp={_timestamp()} request={request_id} "
+        f"stage=reciprocal_rank_fusion "
+        f"event=started dense={len(dense_result)} bm25={len(bm25_result)} "
+        f"candidate_limit={result_limit}",
+        flush=True,
+    )
+    fused_documents = reciprocal_rank_fusion(
         dense_result,
         bm25_result,
         result_limit=result_limit,
         rrf_constant=rrf_constant,
     )
+    rrf_elapsed_ms = (time.perf_counter() - rrf_started) * 1000
+    print(
+        f"[backend] timestamp={_timestamp()} request={request_id} "
+        f"stage=reciprocal_rank_fusion "
+        f"event=completed candidates={len(fused_documents)} "
+        f"elapsed_ms={rrf_elapsed_ms:.2f}",
+        flush=True,
+    )
+    if reranker_client is None or not fused_documents:
+        return fused_documents
+
+    documents_by_id = {
+        _document_id(document): document for document in fused_documents
+    }
+    reranked_results = await reranker_client.rerank(
+        query=query,
+        documents=[
+            {"id": document_id, "text": document.page_content}
+            for document_id, document in documents_by_id.items()
+        ],
+        top_n=rerank_limit,
+        request_id=request_id,
+    )
+
+    mapping_started = time.perf_counter()
+    print(
+        f"[backend] timestamp={_timestamp()} request={request_id} "
+        f"stage=reranked_document_mapping "
+        f"event=started results={len(reranked_results)}",
+        flush=True,
+    )
+    reranked_documents = []
+    for result in reranked_results:
+        document = documents_by_id.get(result.id)
+        if document is None:
+            raise RuntimeError(
+                f"Reranker returned an unknown candidate ID: {result.id!r}."
+            )
+        reranked_documents.append(document)
+    mapping_elapsed_ms = (time.perf_counter() - mapping_started) * 1000
+    print(
+        f"[backend] timestamp={_timestamp()} request={request_id} "
+        f"stage=reranked_document_mapping "
+        f"event=completed mapped={len(reranked_documents)} "
+        f"elapsed_ms={mapping_elapsed_ms:.2f}",
+        flush=True,
+    )
+    return reranked_documents

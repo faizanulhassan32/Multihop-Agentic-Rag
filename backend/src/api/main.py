@@ -2,6 +2,9 @@ import os
 import sys
 import uuid
 import json
+import time
+from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Dict, Any
 
 # Add backend/libs to import path for packaged deps
@@ -19,9 +22,19 @@ os.environ.setdefault("LANGCHAIN_TRACING_V2", "false")
 os.environ.setdefault("LANGCHAIN_ENDPOINT", "")
 
 # Import the LangGraph workflow
-from agent.graph import graph
+from agent.graph import graph, rag_system
 
-app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    rag_system.startup()
+    try:
+        yield
+    finally:
+        await rag_system.shutdown()
+
+
+app = FastAPI(lifespan=lifespan)
 
 # Allow the frontend (likely running on http://localhost:5173) to call the API
 app.add_middleware(
@@ -35,6 +48,17 @@ app.add_middleware(
 # In‑memory store for thread results (simple for demo)
 _thread_store: Dict[str, Dict[str, Any]] = {}
 
+
+def _timestamp() -> str:
+    return datetime.now().astimezone().isoformat(timespec="milliseconds")
+
+
+def _question_preview(question: Any) -> str:
+    question_text = question if isinstance(question, str) else repr(question)
+    question_text = " ".join(question_text.split())
+    if len(question_text) > 200:
+        question_text = f"{question_text[:197]}..."
+    return question_text
 
 
 @app.get("/assistants")
@@ -63,11 +87,25 @@ async def run_stream(
 
     # The frontend now sends a plain JSON payload with a single field "question"
     question = payload.get("question")
+    request_id = uuid.uuid4().hex[:12]
+    request_started = time.perf_counter()
+    print(
+        f"[backend] timestamp={_timestamp()} request={request_id} thread={thread_id} "
+        f"event=request_received question={_question_preview(question)!r}",
+        flush=True,
+    )
     if not question:
+        elapsed_ms = (time.perf_counter() - request_started) * 1000
+        print(
+            f"[backend] timestamp={_timestamp()} request={request_id} thread={thread_id} "
+            f"event=response_completed status=400 elapsed_ms={elapsed_ms:.2f}",
+            flush=True,
+        )
         raise HTTPException(status_code=400, detail="Missing 'question' in request payload")
-    config = {}
+    config = {"metadata": {"request_id": request_id}}
 
     async def event_generator():
+        status = "completed"
         try:
             # Run the LangGraph workflow
             result = await graph.ainvoke({"original_question": question}, config=config)
@@ -88,9 +126,17 @@ async def run_stream(
             # SSE format: "data: <json>\n\n"
             yield f"data: {json.dumps(event)}\n\n"
         except Exception as exc:
+            status = "error"
             # In case of unexpected failure, send an error event
             error_event = {"event": "error", "data": {"message": str(exc)}}
             yield f"data: {json.dumps(error_event)}\n\n"
+        finally:
+            elapsed_ms = (time.perf_counter() - request_started) * 1000
+            print(
+                f"[backend] timestamp={_timestamp()} request={request_id} thread={thread_id} "
+                f"event=response_completed status={status} elapsed_ms={elapsed_ms:.2f}",
+                flush=True,
+            )
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 

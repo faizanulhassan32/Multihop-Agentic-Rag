@@ -20,6 +20,13 @@ class Config:
     OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "llama3:latest")
     OLLAMA_EMBEDDING_MODEL = os.getenv("OLLAMA_EMBEDDING_MODEL", "nomic-embed-text:latest")
 
+    # Reranker service configuration
+    RERANKER_SERVICE_URL = os.getenv(
+        "RERANKER_SERVICE_URL", "http://127.0.0.1:8010"
+    ).strip().rstrip("/")
+    RERANKER_REQUEST_TIMEOUT_SECONDS = float(
+        os.getenv("RERANKER_REQUEST_TIMEOUT_SECONDS", "30")
+    )
 
     # Chroma configuration
     CHROMA_PERSIST_DIR = os.getenv(

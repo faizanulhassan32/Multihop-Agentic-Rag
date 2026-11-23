@@ -10,7 +10,9 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../l
 
 import asyncio
 import os
+import time
 import warnings
+from datetime import datetime
 from pathlib import Path
 from typing import List, TypedDict, Any, Dict, Literal
 
@@ -27,6 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from .classifier import run_classifier
 from .hybrid_retriever import hybrid_search
 from ingestion.config import Config
+from services.reranker_client import RerankerClient
 load_dotenv()
 
 class Configuration(TypedDict):
@@ -64,9 +67,30 @@ class MultiHopState(TypedDict):
     classification_reason: str
     worker_answer: str
 
+
+def _request_id(config: RunnableConfig) -> str:
+    metadata = config.get("metadata") or {}
+    return str(metadata.get("request_id", "unknown"))
+
+
+def _timestamp() -> str:
+    return datetime.now().astimezone().isoformat(timespec="milliseconds")
+
+
 class RAGSystem:
     def __init__(self):
         self._vectorstore = None
+        self._reranker_client: RerankerClient | None = None
+
+    def startup(self) -> None:
+        if self._reranker_client is None:
+            self._reranker_client = RerankerClient()
+
+    async def shutdown(self) -> None:
+        reranker_client = self._reranker_client
+        self._reranker_client = None
+        if reranker_client is not None:
+            await reranker_client.aclose()
     
     def _initialize_if_needed(self):
         if self._vectorstore is None:
@@ -79,7 +103,14 @@ class RAGSystem:
                 collection_name=Config.CHROMA_COLLECTION_NAME,
             )
 
-    async def retrieve_documents(self, query: str) -> List[Document]:
+    async def retrieve_documents(
+        self, query: str, request_id: str = "unknown"
+    ) -> List[Document]:
+        reranker_client = self._reranker_client
+        if reranker_client is None:
+            raise RuntimeError(
+                "Reranker client is not initialized; start the backend application first."
+            )
         try:
             self._initialize_if_needed()
             return await hybrid_search(
@@ -87,9 +118,12 @@ class RAGSystem:
                 vectorstore=self._vectorstore,
                 dense_limit=Config.DENSE_RETRIEVAL_K,
                 bm25_limit=Config.BM25_RETRIEVAL_K,
-                result_limit=Config.HYBRID_RETRIEVAL_K,
+                result_limit=20,
                 rrf_constant=Config.RRF_K,
                 bm25_db_path=Path(Config.BM25_DB_PATH),
+                reranker_client=reranker_client,
+                rerank_limit=Config.HYBRID_RETRIEVAL_K,
+                request_id=request_id,
             )
         except Exception as e:
             print(f"❌ RETRIEVAL ERROR: {type(e).__name__}: {e}")
@@ -98,6 +132,13 @@ class RAGSystem:
 rag_system = RAGSystem()
 
 async def decompose_question(state: MultiHopState, config: RunnableConfig) -> Dict[str, Any]:
+    request_id = _request_id(config)
+    started_at = time.perf_counter()
+    print(
+        f"[backend] timestamp={_timestamp()} request={request_id} "
+        "stage=question_decomposition event=started",
+        flush=True,
+    )
     print("\n" + "="*50)
     print("🧠 STEP 1: DECOMPOSING QUESTION")
     print("="*50)
@@ -142,6 +183,13 @@ async def decompose_question(state: MultiHopState, config: RunnableConfig) -> Di
     except ValidationError as exc:
         raise ValueError("Ollama returned an invalid question decomposition.") from exc
 
+    elapsed_ms = (time.perf_counter() - started_at) * 1000
+    print(
+        f"[backend] timestamp={_timestamp()} request={request_id} "
+        f"stage=question_decomposition "
+        f"event=completed subquestions={len(result.questions)} elapsed_ms={elapsed_ms:.2f}",
+        flush=True,
+    )
     print(f"📝 Original: {state['original_question']}")
     print(f"🎯 Decomposed into {len(result.questions)} sub-questions:")
     for i, q in enumerate(result.questions):
@@ -222,6 +270,7 @@ async def rewrite_query(state: MultiHopState, config: RunnableConfig) -> Dict[st
         return {"rewritten_query": current_question, "trace": state.get("trace", []) + [trace_entry]}
 
 async def retrieve_documents(state: MultiHopState, config: RunnableConfig) -> Dict[str, Any]:
+    request_id = _request_id(config)
     print("\n" + "="*50)
     print("🔍 STEP 2: RETRIEVING DOCUMENTS")
     print("="*50)
@@ -232,7 +281,7 @@ async def retrieve_documents(state: MultiHopState, config: RunnableConfig) -> Di
     print(f"📍 Question {current_q_num}: {state['decomposed_questions'][state['current_question_index']]}")
     print(f"🔍 Search Query: {query}")
     
-    docs = await rag_system.retrieve_documents(query)
+    docs = await rag_system.retrieve_documents(query, request_id=request_id)
     
     print(f"📄 Retrieved: {len(docs)} documents")
     
@@ -298,6 +347,13 @@ async def generate_intermediate_answer(state: MultiHopState, config: RunnableCon
     }
 
 async def generate_final_answer(state: MultiHopState, config: RunnableConfig) -> Dict[str, Any]:
+    request_id = _request_id(config)
+    generation_started = time.perf_counter()
+    print(
+        f"[backend] timestamp={_timestamp()} request={request_id} "
+        "stage=final_answer_generation event=started",
+        flush=True,
+    )
     print("\n" + "="*50)
     print("🎉 STEP 4: SYNTHESIZING FINAL ANSWER")
     print("="*50)
@@ -342,6 +398,13 @@ async def generate_final_answer(state: MultiHopState, config: RunnableConfig) ->
             if token:
                 answer_chunks.append(token)
     final_answer = "".join(answer_chunks)
+    elapsed_ms = (time.perf_counter() - generation_started) * 1000
+    print(
+        f"[backend] timestamp={_timestamp()} request={request_id} "
+        f"stage=final_answer_generation "
+        f"event=completed elapsed_ms={elapsed_ms:.2f}",
+        flush=True,
+    )
     
     print(f"� Final Answer: {final_answer}")
     print("="*50)
@@ -362,7 +425,21 @@ async def supervisor_classify(state: MultiHopState, config: RunnableConfig) -> D
     Stores ``classification`` and ``classification_reason`` in the state.
     """
     question = state.get("original_question", "")
+    request_id = _request_id(config)
+    started_at = time.perf_counter()
+    print(
+        f"[backend] timestamp={_timestamp()} request={request_id} "
+        "stage=supervisor_classification event=started",
+        flush=True,
+    )
     result = await run_classifier(question)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000
+    print(
+        f"[backend] timestamp={_timestamp()} request={request_id} "
+        f"stage=supervisor_classification "
+        f"event=completed classification={result.classification} elapsed_ms={elapsed_ms:.2f}",
+        flush=True,
+    )
     return {
         "classification": result.classification,
         "classification_reason": result.reason,
