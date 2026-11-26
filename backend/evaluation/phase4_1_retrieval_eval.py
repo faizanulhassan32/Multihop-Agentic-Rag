@@ -25,7 +25,7 @@ from langchain_ollama import OllamaEmbeddings
 
 from agent import hybrid_retriever
 from agent.hybrid_retriever import _retrieve_dense, hybrid_search
-from ingestion.config import Config
+from config import Config
 from ingestion.preprocess import CHUNKS_PATH, PROCESSED_SAMPLE_PATH
 
 

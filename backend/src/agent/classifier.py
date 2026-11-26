@@ -7,7 +7,7 @@ from typing import Literal
 from ollama import AsyncClient
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from ingestion.config import Config
+from config import Config
 
 logger = logging.getLogger(__name__)
 

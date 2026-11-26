@@ -33,7 +33,7 @@ from langchain_chroma import Chroma
 from langchain_ollama import OllamaEmbeddings
 
 from agent.hybrid_retriever import hybrid_search
-from ingestion.config import Config
+from config import Config
 from ingestion.preprocess import PROCESSED_SAMPLE_PATH
 
 

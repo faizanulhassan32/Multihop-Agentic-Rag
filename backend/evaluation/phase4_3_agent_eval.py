@@ -50,8 +50,7 @@ from langchain_core.prompts import ChatPromptTemplate
 
 graph_module = __import__("agent.graph", fromlist=["graph"])
 
-from ingestion.config import Config
-
+from config import Config
 
 DEFAULT_QUESTIONS = (
     EVALUATION_DIR / "data" / "hotpotqa_retrieval_eval_20.jsonl"
@@ -333,7 +332,7 @@ async def run_one_question(question_record: dict) -> dict:
 
     graph_config = {
         "configurable": {
-            "model": Config.OLLAMA_CHAT_MODEL,
+            "model": Config.OLLAMA_GENERATION_MODEL,
             "temperature": 0.0,
             "max_tokens": 500,
         },
@@ -689,7 +688,7 @@ async def async_main(args) -> int:
             print(f"Questions: {len(questions)}")
             print(f"Dataset: {dataset_path}")
             print(f"Output: {output_dir}")
-            print(f"Generation model: {Config.OLLAMA_CHAT_MODEL}")
+            print(f"Generation model: {Config.OLLAMA_GENERATION_MODEL}")
             print(f"Classifier model: {Config.OLLAMA_CLASSIFIER_MODEL}")
             print(f"Embedding model: {Config.OLLAMA_EMBEDDING_MODEL}")
             print()

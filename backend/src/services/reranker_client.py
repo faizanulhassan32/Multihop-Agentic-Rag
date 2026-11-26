@@ -9,8 +9,7 @@ import uuid
 
 import httpx
 
-from ingestion.config import Config
-
+from config import Config
 
 MAX_DOCUMENTS_PER_REQUEST = 20
 

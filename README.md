@@ -109,6 +109,202 @@ A preliminary 20-question HotpotQA evaluation showed that reranking improved the
 
 These results are preliminary and require validation on a larger evaluation set.
 
+## Agentic Architecture Restructuring
+
+**Status: In Progress**
+
+Phase 5 restructures the existing sequential multi-hop workflow into a dynamic, planner-driven agentic RAG architecture.
+
+Instead of following a predefined sequence of retrieval and reasoning steps, the new architecture introduces a central orchestrator that plans tasks, manages dependencies, dispatches retrieval workers, evaluates collected evidence, and determines whether additional retrieval is required.
+
+The objective is to build an orchestrator-worker architecture while preserving the existing retrieval infrastructure, supervisor, and local model setup.
+
+### Architecture Overview
+
+The architecture consists of the following components:
+
+1. **Supervisor:** Classifies incoming requests, determines whether they are in scope, and owns final response routing and finalization.
+2. **Task Planner:** Converts the original question into structured retrieval tasks, identifying independent information requirements and task dependencies.
+3. **Task Manager:** Validates task plans, dependency relationships, unique task IDs, and execution limits.
+4. **Task Scheduler:** Determines which tasks are ready for execution and manages task status, dependencies, and concurrency.
+5. **Dynamic Task Dispatcher:** Uses LangGraph `Send` to dispatch independent retrieval tasks to workers in parallel.
+6. **Retrieval Workers:** Execute individual retrieval tasks using the existing hybrid retrieval and reranking infrastructure.
+7. **Evidence Aggregation:** Collects and deduplicates retrieved documents while preserving their source-task provenance.
+8. **Evidence Assessor:** Evaluates whether the collected evidence sufficiently covers the original information requirements and identifies missing information.
+9. **Follow-up Planner:** Creates targeted retrieval tasks when evidence gaps remain, subject to configured execution limits.
+10. **Answer Synthesis:** Generates the final answer using accumulated evidence.
+11. **Grounding and Validation:** Checks answer support and completeness before supervisor finalization.
+
+### High-Level Architecture Flow
+
+```mermaid
+flowchart TD
+    A[User Query] --> B[Supervisor Classification]
+    B -->|Rejected / Clarification| Z[Supervisor Finalization]
+    B -->|Accepted| C[Task Planner]
+    C --> D[Structured Task Plan]
+    D --> E[Dependency-Aware Scheduler]
+    E --> F[Dynamic Task Dispatcher]
+    F --> G1[Retrieval Worker 1]
+    F --> G2[Retrieval Worker 2]
+    F --> G3[Retrieval Worker N]
+    G1 --> H[Collect Results]
+    G2 --> H
+    G3 --> H
+    H --> I[Update Tasks and Shared Evidence]
+    I --> J{All Tasks Completed?}
+    J -->|No| E
+    J -->|Yes| K[Evidence Assessment]
+    K --> L{Evidence Sufficient?}
+    L -->|No, Budget Available| M[Follow-up Task Planner]
+    M --> E
+    L -->|Yes or Budget Exhausted| N[Answer Synthesis]
+    N --> O[Grounding and Completeness Validation]
+    O --> Z
+    Z --> P[Final Response]
+```
+
+### Sequential Execution: Query to Answer
+
+The following sequence illustrates how the system processes a question. Independent retrieval tasks within the same execution batch run concurrently.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant S as Supervisor
+    participant P as Planner
+    participant O as Orchestrator
+    participant Q as Scheduler
+    participant W as Retrieval Workers
+    participant R as Hybrid Retrieval
+    participant E as Evidence Assessor
+    participant F as Follow-up Planner
+    participant A as Answer Generator
+    participant V as Grounding Validator
+
+    User->>S: Submit question
+    S->>S: Classify request
+
+    alt Rejected or clarification required
+        S->>User: Return appropriate response
+    else Accepted request
+        S->>O: Start orchestration
+        O->>P: Generate task plan
+        P-->>O: Tasks and dependencies
+        O->>Q: Validate and initialize tasks
+
+        loop Until all planned tasks are terminal
+            Q->>Q: Select dependency-ready tasks
+            Q->>W: Dispatch parallel workers
+            par Independent retrieval
+                W->>R: Execute task 1
+                R-->>W: Retrieved evidence
+            and
+                W->>R: Execute task 2
+                R-->>W: Retrieved evidence
+            and
+                W->>R: Execute task N
+                R-->>W: Retrieved evidence
+            end
+            W-->>O: Return task results
+            O->>O: Merge evidence and update task states
+        end
+
+        O->>E: Assess accumulated evidence
+        E-->>O: Evidence coverage and identified gaps
+
+        opt Evidence gaps remain and budget is available
+            O->>F: Generate targeted follow-up tasks
+            F-->>O: Additional retrieval tasks
+            O->>Q: Schedule follow-up tasks
+            Note over O,Q: Execute another bounded retrieval round
+            O->>E: Reassess accumulated evidence
+            E-->>O: Updated evidence assessment
+        end
+
+        O->>A: Generate answer from accumulated evidence
+        A-->>O: Draft answer
+        O->>V: Validate grounding and completeness
+        V-->>O: Validation result
+        O->>S: Return result for finalization
+        S->>User: Final response
+    end
+```
+
+### Task Execution and Dependency Management
+
+Tasks are represented as structured records containing:
+
+- Task ID and question.
+- Retrieval query.
+- Dependency references.
+- Execution status.
+- Priority and follow-up round.
+- Retrieved evidence IDs.
+- Attempt count and error information.
+
+Independent tasks can execute concurrently, while dependent tasks wait until their prerequisites have completed.
+
+LangGraph's `StateGraph`, conditional routing, state reducers, and `Send` are used to coordinate dynamic execution.
+
+### Evidence Assessment and Adaptive Retrieval
+
+After the currently planned retrieval tasks finish, the evidence assessor evaluates the accumulated documents against the original task requirements.
+
+Evidence is maintained as structured records containing document IDs, content, metadata, and source-task references. Duplicate documents are merged without losing provenance.
+
+When evidence gaps remain, the follow-up planner can create additional targeted retrieval tasks. Their results are added to the shared evidence collection and reassessed against the original information requirements.
+
+The current evidence assessment uses lexical term coverage as a retrieval diagnostic. It is not a semantic entailment or factual-confidence measure. Stronger grounding and answer verification are part of the subsequent implementation work.
+
+### Execution Controls
+
+The architecture uses configurable execution limits to prevent uncontrolled task creation and resource consumption.
+
+| Setting | Initial Value | Purpose |
+|---|---:|---|
+| `MAX_PLANNED_TASKS` | 4 | Maximum planned tasks |
+| `MAX_FOLLOWUP_ROUNDS` | 1 | Maximum adaptive retrieval rounds |
+| `MAX_RETRIEVAL_CONCURRENCY` | 3 | Concurrent retrieval workers |
+| `MAX_RETRIEVAL_RETRIES` | 1 | Intended retrieval retry limit |
+| `TASK_RERANK_LIMIT` | 5 | Reranked documents per task |
+| `MAX_CONCURRENT_GENERATIONS` | 1 | Concurrent generation limit |
+
+The design prioritizes parallel retrieval while keeping local LLM generation controlled for the target Apple M2 machine with 16 GB unified memory.
+
+### Implementation Progress
+
+The following components have been introduced:
+
+- Centralized backend configuration and execution limits.
+- Structured task, task-result, and evidence models.
+- Task-plan validation and dependency management.
+- Dynamic task scheduling and execution control.
+- Planner and retrieval worker components.
+- Shared RAG system abstraction.
+- LangGraph dynamic dispatch using `Send`.
+- Shared evidence aggregation with provenance preservation.
+- Evidence assessment and targeted follow-up task generation.
+- Adaptive graph routing and supervisor integration.
+
+Component-level tests and graph integration tests have passed. However, the complete end-to-end runtime is still being validated.
+
+**Current integration issue:** The first end-to-end test exposed an API mismatch between `RAGSystem` and the existing `hybrid_search()` implementation. Retrieval workers currently fail because the `reranker` keyword passed by `RAGSystem` is not accepted by the existing retriever. This integration must be corrected and verified before the restructuring can be considered operational.
+
+The end-to-end test must also verify successful task execution, non-empty evidence, evidence assessment, and an evidence-supported final answer. Reaching the final graph node alone does not constitute a successful test.
+
+### Remaining Work
+
+The restructuring will continue through the following stages:
+
+- **Stage 5: Evidence assessment and adaptive retrieval:** Complete and validate retrieval integration, evidence aggregation, and bounded follow-up execution.
+- **Stage 6: Answer synthesis and grounding:** Generate answers from structured evidence, preserve provenance, and implement grounding and completeness validation.
+- **Stage 7: Supervisor integration and final graph:** Verify routing, finalization, error handling, and compatibility with the existing token-streaming frontend.
+- **Stage 8: End-to-end integration and evaluation:** Validate the complete workflow using local models and indexes, test failure scenarios, and compare latency and answer quality against the existing baseline.
+
+The restructuring is intended to evolve the existing system incrementally, retaining its local-first design and established retrieval infrastructure rather than replacing the original implementation.
+
 ## Development Progress
 
 | Phase | Description | Status |

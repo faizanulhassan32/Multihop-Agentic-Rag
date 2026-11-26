@@ -7,7 +7,7 @@ from langchain_ollama import OllamaEmbeddings
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 
-from .config import Config
+from config import Config
 from .preprocess import CHUNKS_PATH
 
 

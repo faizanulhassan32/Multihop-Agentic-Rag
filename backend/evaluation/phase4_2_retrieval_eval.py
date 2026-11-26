@@ -68,7 +68,7 @@ from agent.hybrid_retriever import (
     _retrieve_bm25,
     reciprocal_rank_fusion,
 )
-from ingestion.config import Config
+from config import Config
 from ingestion.preprocess import CHUNKS_PATH
 from services.reranker_client import RerankerClient
 

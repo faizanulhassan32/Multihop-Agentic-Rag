@@ -18,7 +18,7 @@ from chromadb.config import Settings
 from langchain_core.prompts import ChatPromptTemplate
 
 graph_module = importlib.import_module("agent.graph")
-from ingestion.config import Config
+from config import Config
 from ingestion.preprocess import PROCESSED_SAMPLE_PATH
 
 
@@ -71,7 +71,7 @@ async def _run(question: str):
 
     config = {
         "configurable": {
-            "model": Config.OLLAMA_CHAT_MODEL,
+            "model": Config.OLLAMA_GENERATION_MODEL,
             "temperature": 0.0,
             "max_tokens": 200,
         }

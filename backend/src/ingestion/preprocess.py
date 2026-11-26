@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from typing import List, Dict, Tuple, Set
 
-from .config import Config
+from config import Config
 
 PROCESSED_DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "processed"
 PROCESSED_DATA_DIR.mkdir(parents=True, exist_ok=True)

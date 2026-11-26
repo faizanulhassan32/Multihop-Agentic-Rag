@@ -9,8 +9,7 @@ import chromadb
 from chromadb.config import Settings
 from langchain_chroma import Chroma
 from langchain_ollama import OllamaEmbeddings
-from src.ingestion.config import Config
-
+from src.config import Config
 
 class TestVectorstoreIntegration(unittest.TestCase):
     @classmethod

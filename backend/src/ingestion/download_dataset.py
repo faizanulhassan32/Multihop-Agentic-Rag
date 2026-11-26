@@ -6,7 +6,7 @@ from typing import List, Dict
 from datasets import load_dataset
 from tqdm import tqdm
 
-from .config import Config
+from config import Config
 
 RAW_DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "raw"
 RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)

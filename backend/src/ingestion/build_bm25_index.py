@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set
 
-from .config import Config
+from config import Config
 
 
 _QUERY_TOKEN = re.compile(r"\w+", re.UNICODE)
