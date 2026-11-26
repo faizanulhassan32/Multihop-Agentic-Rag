@@ -135,34 +135,43 @@ The architecture consists of the following components:
 10. **Answer Synthesis:** Generates the final answer using accumulated evidence.
 11. **Grounding and Validation:** Checks answer support and completeness before supervisor finalization.
 
+
 ### High-Level Architecture Flow
 
 ```mermaid
+%%{init: {"flowchart": {"curve": "linear", "nodeSpacing": 45, "rankSpacing": 55, "htmlLabels": true}}}%%
 flowchart TD
-    A[User Query] --> B[Supervisor Classification]
-    B -->|Rejected / Clarification| Z[Supervisor Finalization]
-    B -->|Accepted| C[Task Planner]
-    C --> D[Structured Task Plan]
-    D --> E[Dependency-Aware Scheduler]
-    E --> F[Dynamic Task Dispatcher]
-    F --> G1[Retrieval Worker 1]
-    F --> G2[Retrieval Worker 2]
-    F --> G3[Retrieval Worker N]
-    G1 --> H[Collect Results]
+    A["User Query"] --> B["Supervisor Classification"]
+    B -->|Rejected / Clarification| Z["Supervisor Finalization"]
+    B -->|Accepted| C["Task Planner"]
+    C --> D["Structured Task Plan"]
+    D --> E["Dependency-Aware Scheduler"]
+    E --> F["Dynamic Task Dispatcher"]
+
+    F --> G1["Retrieval Worker 1"]
+    F --> G2["Retrieval Worker 2"]
+    F --> G3["Retrieval Worker N"]
+
+    G1 --> H["Collect Results"]
     G2 --> H
     G3 --> H
-    H --> I[Update Tasks and Shared Evidence]
-    I --> J{All Tasks Completed?}
+
+    H --> I["Update Tasks and Shared Evidence"]
+    I --> J{"All Tasks Completed?"}
+
     J -->|No| E
-    J -->|Yes| K[Evidence Assessment]
-    K --> L{Evidence Sufficient?}
-    L -->|No, Budget Available| M[Follow-up Task Planner]
+    J -->|Yes| K["Evidence Assessment"]
+
+    K --> L{"Evidence Sufficient?"}
+    L -->|No, Budget Available| M["Follow-up Task Planner"]
     M --> E
-    L -->|Yes or Budget Exhausted| N[Answer Synthesis]
-    N --> O[Grounding and Completeness Validation]
+    L -->|Yes or Budget Exhausted| N["Answer Synthesis"]
+
+    N --> O["Grounding and Completeness Validation"]
     O --> Z
-    Z --> P[Final Response]
+    Z --> P["Final Response"]
 ```
+
 
 ### Sequential Execution: Query to Answer
 
