@@ -117,27 +117,26 @@ These results are preliminary and require validation on a larger evaluation set.
 | Phase 2 | Supervisor integration and request classification | Complete |
 | Phase 3 | Initial performance optimization and streaming | Complete |
 | Phase 4 | Hybrid retrieval, reranking, and retrieval evaluation | Complete |
-| Phase 5 | End-to-end agentic RAG evaluation | Next |
-| Phase 6 | Agentic architecture improvements | Planned |
-| Phase 7 | Evidence grounding and answer verification | Planned |
-| Phase 8 | Reliability, observability, and final optimization | Planned |
+| Phase 5 | Agentic architecture improvements | Planned |
+| Phase 6 | Evidence grounding and answer verification | Planned |
+| Phase 7 | Reliability, observability, and final optimization | Planned |
 
-**Deferred work:** Additional retrieval techniques such as query expansion and MMR were considered but not implemented. The current retrieval pipeline already combines semantic search, keyword search, and reranking. Further retrieval changes will depend on evidence from end-to-end evaluation rather than adding complexity without a demonstrated need.
+**Deferred work:** Query expansion and MMR were considered but skipped because the existing hybrid retrieval and reranking pipeline provides a strong foundation. Additional retrieval techniques can be introduced later if evaluation identifies a need.
 
-A separate retrieval-evaluation phase was also skipped because retrieval had already been evaluated during Phase 4.
+A separate retrieval-evaluation phase was skipped because retrieval performance was already evaluated in Phase 4.
 
 ## Next Step
 
-The next step is to establish an end-to-end evaluation baseline for the complete existing agent workflow.
+Phase 5 will focus on restructuring the existing sequential workflow into a more adaptive agentic architecture.
 
-This will help identify where the system struggles, particularly with:
-- Multi-hop answer correctness.
-- Evidence retrieval and utilization.
-- Intermediate reasoning quality.
-- Unsupported or hallucinated answers.
-- Latency and execution reliability.
+The planned improvements include:
+- Structured planning and task decomposition.
+- Parallel execution of independent retrieval tasks.
+- Dynamic task routing and dependency management.
+- Evidence assessment and adaptive follow-up retrieval.
+- Controlled reasoning and execution loops.
 
-The agentic graph will remain unchanged during this baseline evaluation.
+The goal is to move towards an orchestrator-worker architecture that can plan, delegate, evaluate intermediate results, and determine when additional retrieval is required before generating a final answer.
 
 ## Project Goal
 
