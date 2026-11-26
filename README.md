@@ -2,20 +2,22 @@
 
 A locally running, agentic Retrieval-Augmented Generation (RAG) system designed to answer complex questions requiring information retrieval and reasoning across multiple documents.
 
+The project explores multi-hop question answering through question decomposition, hybrid retrieval, reranking, and evidence-based answer generation, using locally hosted language models.
+
 ## Overview
 
-Traditional RAG systems often struggle with questions that require multiple retrieval steps and connecting information from different sources.
+Traditional RAG systems often struggle with questions that require connecting information across multiple documents.
 
-This project addresses these challenges through a multi-hop retrieval workflow that decomposes complex questions, retrieves supporting evidence, and generates answers using the collected context.
+This project addresses these limitations through a multi-hop workflow that decomposes complex questions, retrieves relevant evidence, and generates answers from the collected context.
 
-The system runs locally using Ollama, without relying on paid hosted inference APIs.
+The system runs locally using Ollama, without relying on hosted inference APIs.
 
 ## Problems Addressed
 
-- **Multi-hop reasoning:** Single-step retrieval can miss information spread across multiple documents.
-- **Retrieval limitations:** Dense search can overlook exact keywords, names, and uncommon terms.
-- **Inference latency:** Multiple sequential LLM calls increase response time.
-- **Local resource constraints:** Running larger models locally requires efficient model and workflow management.
+- **Multi-hop reasoning:** Connecting information spread across multiple documents.
+- **Retrieval limitations:** Combining semantic and keyword-based search.
+- **Inference latency:** Reducing unnecessary sequential LLM calls.
+- **Local resource constraints:** Optimizing inference and retrieval for local hardware.
 
 ## Technology Stack
 
@@ -24,8 +26,8 @@ The system runs locally using Ollama, without relying on paid hosted inference A
 | Backend | Python, FastAPI |
 | Agent orchestration | LangGraph, LangChain |
 | Local inference | Ollama |
-| Answer generation | Llama 3 |
-| Supervisor | Qwen 2.5 1.5B |
+| Generation model | Llama 3 |
+| Supervisor model | Qwen 2.5 1.5B |
 | Embeddings | nomic-embed-text |
 | Vector database | ChromaDB |
 | Sparse retrieval | SQLite FTS5 BM25 |
@@ -37,169 +39,108 @@ The system runs locally using Ollama, without relying on paid hosted inference A
 
 The project uses a 500-example sample of the HotpotQA distractor dataset for development and evaluation.
 
-The ingestion pipeline:
+The ingestion pipeline processes the dataset, creates document chunks, generates local embeddings, and builds synchronized ChromaDB and BM25 indexes.
 
-1. Loads and processes the dataset.
-2. Prepares document chunks and assigns stable IDs.
-3. Generates embeddings using the local Ollama embedding model.
-4. Stores dense vectors in ChromaDB.
-5. Builds a persistent SQLite FTS5 BM25 index using the same chunks and IDs.
-6. Synchronizes both indexes and verifies ID consistency.
+**Current index:**
+- 500 dataset examples
+- 5,348 indexed document chunks
+- Consistent document IDs across both retrieval indexes
 
-**Current ingestion results:**
-
-| Metric | Count |
-|---|---:|
-| Dataset sample | 500 examples |
-| Indexed chunks | 5,348 |
-| ChromaDB documents | 5,348 |
-| BM25 documents | 5,348 |
-| Matching chunk IDs | Exact match |
-
-**Storage locations:**
-
-- ChromaDB: `backend/data/chroma/hotpotqa_distractor_500`
-- BM25: `backend/data/bm25/index.sqlite3`
-
-Dataset, embeddings, indexes, and other local artifacts are excluded from Git.
+Dataset files, embeddings, and local index artifacts are excluded from Git.
 
 ## Agent Workflow
 
-The current LangGraph workflow includes:
+The current LangGraph workflow follows a predefined multi-hop execution path:
 
-1. **Supervisor classification:** Handles request classification, scope, intent, and invalid or potentially unsafe inputs.
+1. **Supervisor classification:** Classifies requests and handles invalid or out-of-scope inputs.
 2. **Question decomposition:** Breaks complex questions into smaller sub-questions.
-3. **Parallel retrieval:** Retrieves supporting documents for the sub-questions.
-4. **Follow-up retrieval:** Performs additional retrieval when required.
-5. **Final answer generation:** Generates an answer using the collected evidence.
+3. **Query rewriting:** Refines sub-questions for retrieval.
+4. **Sequential retrieval and reasoning:** Retrieves evidence and generates intermediate answers for each sub-question.
+5. **Final answer generation:** Combines intermediate answers and supporting evidence.
 6. **Supervisor finalization:** Handles the final response.
 
-The current workflow uses a predefined graph structure. Dynamic planning, more advanced reasoning loops, and additional agentic capabilities are planned for subsequent phases.
+The current workflow is structured and sequential. More advanced planning, evidence sufficiency checks, and adaptive reasoning are not yet implemented.
 
 ## Performance Optimization
 
-The original workflow used multiple sequential LLM calls for intermediate reasoning and answer generation.
+The existing workflow was optimized to reduce unnecessary LLM calls and improve response latency.
 
-The optimization introduced:
-
-- Parallel retrieval.
-- Reduced intermediate LLM calls.
+Key improvements include:
+- Reduced intermediate generation calls.
 - Reuse of initialized LLM instances.
-- Configurable retrieval and follow-up limits.
+- Configurable retrieval limits.
 - Token-by-token streaming of final answers.
 
-**Reported performance:**
+**Development benchmark:**
 
 | Metric | Before | After |
 |---|---:|---:|
-| Average latency | 17.669s | 6.995s |
-| Median latency | 16.531s | 7.475s |
-| P95 latency | 28.023s | 11.902s |
-| LLM calls/query | 6-12 | 3 |
+| Average latency | 17.67s | 7.00s |
+| Median latency | 16.53s | 7.48s |
+| P95 latency | 28.02s | 11.90s |
+| LLM calls per query | 6-12 | 3 |
 
-Results are based on a small development evaluation of six questions and three additional warm executions. These measurements represent the agent workflow before the latest retrieval and reranking changes.
+These measurements represent an earlier development benchmark and are not a benchmark of the complete current system.
 
 ## Hybrid Retrieval
 
-The retrieval layer combines semantic search with keyword-based search to improve evidence retrieval.
+The retrieval layer combines dense vector search and BM25 keyword search.
 
-### Retrieval Pipeline
+**Retrieval pipeline:**
 
 1. Dense retrieval using ChromaDB.
 2. BM25 retrieval using SQLite FTS5.
-3. Parallel execution of both retrieval methods.
-4. Reciprocal Rank Fusion (RRF) to combine ranked results.
-5. Deduplication using stable chunk IDs.
-6. BGE reranking of fused candidates.
-7. Return of the highest-ranked documents to the agent.
+3. Reciprocal Rank Fusion (RRF) to combine results.
+4. Deduplication using stable document IDs.
+5. BGE reranking to prioritize relevant evidence.
 
-Both retrieval backends expose stable chunk IDs through `Document.metadata["id"]`.
+The system retrieves up to 10 candidates from each retrieval method, combines them, and passes the top 5 reranked documents to the agent.
 
-### Configuration
+**Retrieval evaluation:**
 
-Defaults can be overridden in `backend/.env`:
+A preliminary 20-question HotpotQA evaluation showed that reranking improved the quality of the top-ranked results:
 
-| Variable | Default |
-|---|---:|
-| `DENSE_RETRIEVAL_K` | 10 |
-| `BM25_RETRIEVAL_K` | 10 |
-| `HYBRID_RETRIEVAL_K` | 5 |
-| `RRF_K` | 60 |
+| Metric | Dense | Reranked |
+|---|---:|---:|
+| Recall@5 | 85.0% | 92.5% |
+| Recall@10 | 85.0% | 95.0% |
+| MRR@10 | 0.913 | 1.000 |
+| nDCG@5 | 0.826 | 0.936 |
 
-### Reranker
+These results are preliminary and require validation on a larger evaluation set.
 
-The project uses `BAAI/bge-reranker-base`, hosted as a standalone local service.
+## Development Progress
 
-- Service directory: `reranker-service/`
-- Health endpoint: `GET /health`
-- Readiness endpoint: `GET /ready`
-- Reranking endpoint: `POST /v1/rerank`
-- Default service URL: `http://localhost:8010`
-- Backend client: `backend/src/services/reranker_client.py`
+| Phase | Description | Status |
+|---|---|---|
+| Phase 1 | Project foundation and local RAG setup | Complete |
+| Phase 2 | Supervisor integration and request classification | Complete |
+| Phase 3 | Initial performance optimization and streaming | Complete |
+| Phase 4 | Hybrid retrieval, reranking, and retrieval evaluation | Complete |
+| Phase 5 | End-to-end agentic RAG evaluation | Next |
+| Phase 6 | Agentic architecture improvements | Planned |
+| Phase 7 | Evidence grounding and answer verification | Planned |
+| Phase 8 | Reliability, observability, and final optimization | Planned |
 
-The reranker scores the fused retrieval candidates and reorders them based on their relevance to the query.
+**Deferred work:** Additional retrieval techniques such as query expansion and MMR were considered but not implemented. The current retrieval pipeline already combines semantic search, keyword search, and reranking. Further retrieval changes will depend on evidence from end-to-end evaluation rather than adding complexity without a demonstrated need.
 
-The service is integrated into the existing retrieval pipeline without changing the agentic graph structure.
+A separate retrieval-evaluation phase was also skipped because retrieval had already been evaluated during Phase 4.
 
-## Retrieval Evaluation
+## Next Step
 
-A 20-question HotpotQA evaluation was conducted to compare dense retrieval, BM25, Reciprocal Rank Fusion, and reranked hybrid retrieval.
+The next step is to establish an end-to-end evaluation baseline for the complete existing agent workflow.
 
-The evaluation includes bridge and comparison questions across easy, medium, and hard difficulty levels.
+This will help identify where the system struggles, particularly with:
+- Multi-hop answer correctness.
+- Evidence retrieval and utilization.
+- Intermediate reasoning quality.
+- Unsupported or hallucinated answers.
+- Latency and execution reliability.
 
-### Results
+The agentic graph will remain unchanged during this baseline evaluation.
 
-| Metric | Dense | BM25 | RRF | Reranked |
-|---|---:|---:|---:|---:|
-| Recall@5 | 85.0% | 62.5% | 82.5% | **92.5%** |
-| Recall@10 | 85.0% | 82.5% | 92.5% | **95.0%** |
-| Recall@20 | N/A | N/A | 95.0% | 95.0% |
-| MRR@10 | 0.913 | 0.788 | 0.854 | **1.000** |
-| nDCG@5 | 0.826 | 0.616 | 0.757 | **0.936** |
-| Evidence Coverage@5 | 85.8% | 64.2% | 82.5% | **93.3%** |
+## Project Goal
 
-### Retrieval Latency
+The long-term goal is to develop a reliable, fully local agentic RAG system that can autonomously plan multi-hop questions, retrieve sufficient evidence, reason across multiple sources, and produce accurate, well-grounded answers.
 
-| Component | Mean Latency |
-|---|---:|
-| Dense retrieval | 23 ms |
-| BM25 retrieval | 24 ms |
-| Parallel retrieval | 27.5 ms |
-| RRF fusion | 0.02 ms |
-| Reranking | 396.9 ms |
-| Total retrieval pipeline | 424.5 ms |
-
-### Observations
-
-- Dense retrieval remains a strong baseline, particularly for initial candidate retrieval.
-- BM25 complements semantic retrieval by identifying keyword-relevant documents.
-- RRF improves recall at larger retrieval depths, although its top-5 ranking does not consistently outperform dense retrieval alone.
-- Reranking significantly improves the ordering of relevant documents within the final top-5 results.
-- The reranker improves Recall@5, MRR@10, nDCG@5, and evidence coverage compared with the evaluated dense and hybrid baselines.
-
-These results are preliminary and based on a 20-question evaluation sample. Larger evaluations are required to establish general performance.
-
-## Current Phase 4 Progress
-
-| Component | Status |
-|---|---|
-| Local ingestion and persistent indexes | Complete |
-| Supervisor integration | Complete |
-| Latency optimization and streaming | Complete |
-| Persistent BM25 retrieval | Complete |
-| Hybrid retrieval using RRF | Complete |
-| Standalone reranker service | Complete |
-| Reranker integration with hybrid retrieval | Complete |
-| Retrieval evaluation | Complete (20-question sample) |
-| End-to-end agent evaluation | Pending |
-| Agentic architecture improvements | Planned |
-
-## Next Steps
-
-The next step is to evaluate the complete existing agent pipeline using the same evaluation questions.
-
-This evaluation will measure answer correctness, multi-hop performance, evidence utilization, latency, and execution traces to identify the actual failure points in the current workflow.
-
-These findings will guide subsequent improvements to the agentic architecture, including planning, evidence sufficiency, iterative retrieval, reasoning, and answer verification.
-
-The agentic graph will remain unchanged until the end-to-end baseline has been established.
+The architecture will evolve based on measured weaknesses in the current system, rather than introducing additional agentic components without evidence.

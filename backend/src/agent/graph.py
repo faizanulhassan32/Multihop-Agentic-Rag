@@ -366,21 +366,42 @@ async def generate_final_answer(state: MultiHopState, config: RunnableConfig) ->
 
     configuration = config.get("configurable", {})
     
+    
     prompt = ChatPromptTemplate.from_template(
         """
-        You are a master synthesist. You have been provided with a series of facts that were gathered to answer a complex user question.
-        Combine these facts into a single, clear, and comprehensive answer.
+        You are the final answer generation component of a multi-hop question-answering system.
+        Your task is to answer the ORIGINAL QUESTION using the information contained in the INTERMEDIATE ANSWERS.
 
-        IMPORTANT: Do NOT include any introductory, explanatory, or concluding phrases (such as 'Here is my conclusion', 'Based on the context', 'In summary', etc.).
-        Only provide the direct cumulative answer to the original question.
+        INSTRUCTIONS:
 
-        Original Question: {original_question}
-        Facts Gathered:
+        1. Understand exactly what the original question is asking. Identify the specific entity, fact, attribute, relationship, date, location, or comparison requested.
+        2. Use the intermediate answers as supporting evidence. Combine information from multiple answers only when necessary to resolve the original question.
+        3. Prioritize relevance over completeness. Include only information that directly answers the original question. Do not summarize every intermediate answer or introduce related facts simply because they are available.
+        4. Preserve factual accuracy. Do not invent, assume, or introduce information that is not supported by the intermediate answers.
+        5. Avoid repetition. Do not restate the same fact in different words or repeat the answer unnecessarily.
+        6. Match the answer format to the question:
+            - For a question asking for a name, title, date, location, or other specific fact, return that fact directly.
+            - For a question asking for an explanation or relationship, provide a concise explanation containing the necessary details.
+            - For a comparison, explicitly state the relevant comparison.
+            - Do not add biographical or contextual information unless the question requires it.
+        7. If the intermediate answers do not contain enough reliable information to answer the original question, clearly state that the available information is insufficient. Do not guess.
+
+        OUTPUT REQUIREMENTS:
+        - Return only the answer to the original question.
+        - Do not include introductory phrases, reasoning, analysis, conclusions, or references to the intermediate answers.
+        - Do not repeat the original question.
+        - Prefer a short phrase or sentence when that fully answers the question.
+        - Use additional sentences only when necessary to answer the question accurately.
+
+        ORIGINAL QUESTION:
+        {original_question}
+
+        INTERMEDIATE ANSWERS:
         {context}
 
-        Final Answer (no extra text):
-        """
+        FINAL ANSWER:"""
     )
+
     prompt_text = prompt.format(context=context, original_question=original_question)
     answer_chunks = []
     async with AsyncClient(host=Config.OLLAMA_BASE_URL) as client:
