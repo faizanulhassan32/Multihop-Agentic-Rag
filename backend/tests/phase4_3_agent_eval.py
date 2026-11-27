@@ -51,6 +51,7 @@ from langchain_core.prompts import ChatPromptTemplate
 graph_module = __import__("agent.graph", fromlist=["graph"])
 
 from config import Config
+from agent.rag_system import rag_system
 
 DEFAULT_QUESTIONS = (
     TESTS_DIR / "data" / "hotpotqa_retrieval_eval_20.jsonl"
@@ -282,7 +283,7 @@ async def run_one_question(question_record: dict) -> dict:
     retrieval_calls = []
     answer_contexts = []
 
-    original_retrieve = graph_module.rag_system.retrieve_documents
+    original_retrieve = rag_system.retrieve_documents
     original_prompt_ainvoke = ChatPromptTemplate.ainvoke
 
     async def capture_retrieval(query: str, request_id: str = "unknown"):
@@ -347,7 +348,7 @@ async def run_one_question(question_record: dict) -> dict:
 
     with (
         patch.object(
-            graph_module.rag_system,
+            rag_system,
             "retrieve_documents",
             new=capture_retrieval,
         ),
@@ -400,7 +401,7 @@ async def run_one_question(question_record: dict) -> dict:
 async def run_evaluation(questions: list[dict]) -> list[dict]:
     results = []
 
-    graph_module.rag_system.startup()
+    rag_system.startup()
 
     try:
         for index, question_record in enumerate(questions, start=1):
@@ -467,7 +468,7 @@ async def run_evaluation(questions: list[dict]) -> list[dict]:
             results.append(result)
 
     finally:
-        await graph_module.rag_system.shutdown()
+        await rag_system.shutdown()
 
     return results
 

@@ -7,8 +7,7 @@ backend/agent.egg-info
 backend/data
 backend/libs
 frontend/.env
-backend/evaluation/results/
-backend/evaluation/data/
+backend/tests/results/
 
 # Python cache files
 __pycache__/

@@ -37,6 +37,12 @@ from agent.task_dispatcher import (
     execute_retrieval_task_node,
     collect_retrieval_results,
 )
+from agent.answer_synthesis import (
+    AnswerSynthesis,
+    format_evidence_context,
+    normalize_evidence,
+    parse_synthesis_response,
+)
 
 load_dotenv()
 
@@ -238,7 +244,13 @@ async def generate_final_answer(
     state: MultiHopState,
     config: RunnableConfig,
 ) -> Dict[str, Any]:
-    """Generate the answer using accumulated retrieved evidence."""
+    """
+    Synthesize one structured answer from all accumulated evidence.
+
+    This retains the existing graph node and routing. Grounding validation
+    is implemented separately in Stage 6 and will be connected to graph
+    routing during Stage 7.
+    """
 
     request_id = _request_id(config)
     started_at = time.perf_counter()
@@ -247,19 +259,29 @@ async def generate_final_answer(
     evidence = state.get("evidence", [])
 
     logger.info(
-        "Final answer generation started: request_id=%s evidence_count=%d",
+        "Final answer synthesis started: request_id=%s evidence_count=%d",
         request_id,
         len(evidence),
     )
 
     if not evidence:
-        answer = (
-            "I don't have enough relevant information in my knowledge base "
-            "to answer this question reliably."
+
+        synthesis = AnswerSynthesis(
+            answer=(
+                "I don't have enough relevant information in my "
+                "knowledge base to answer this question reliably."
+            ),
+            status="no_evidence",
+            warnings=[
+                "No evidence records were available for synthesis."
+            ],
         )
 
         return {
-            "final_answer": answer,
+            "final_answer": synthesis.answer,
+            "answer_synthesis": synthesis.model_dump(
+                mode="json"
+            ),
             "trace": [
                 {
                     "step": "generate_final_answer",
@@ -268,45 +290,69 @@ async def generate_final_answer(
                         "question": question,
                         "evidence_count": 0,
                     },
-                    "output": {"final_answer": answer},
+                    "output": {
+                        "final_answer": synthesis.answer,
+                        "synthesis_status": synthesis.status,
+                        "used_evidence_ids": [],
+                    },
                 }
             ],
         }
 
-    evidence_context = "\n\n".join(
-        (
-            f"Evidence ID: {item.get('doc_id', 'unknown')}\n"
-            f"Content: {item.get('content', '')}"
-        )
-        for item in evidence
+    normalized_evidence = normalize_evidence(
+        evidence
     )
 
-    configuration = config.get("configurable", {})
+    evidence_context = format_evidence_context(
+        normalized_evidence
+    )
+
+    available_evidence_ids = {
+        item.doc_id
+        for item in normalized_evidence
+    }
+
+    configuration = config.get(
+        "configurable",
+        {},
+    )
 
     prompt = ChatPromptTemplate.from_template(
-        """
-You are the final answer generation component of a factual multi-hop
-question-answering system.
+    """
+        You are the answer synthesis component of a factual
+        multi-hop question-answering system.
 
-Answer the ORIGINAL QUESTION using ONLY the RETRIEVED EVIDENCE.
+        Generate one coherent answer to the ORIGINAL QUESTION using
+        ONLY the ACCUMULATED RETRIEVED EVIDENCE.
 
-Instructions:
-1. Answer the exact question asked.
-2. Combine evidence from multiple documents when necessary.
-3. Do not invent facts or rely on outside knowledge.
-4. If the evidence is insufficient or contradictory, clearly say so.
-5. Be concise and avoid unnecessary background information.
-6. Do not mention internal task IDs or the retrieval process.
-7. Return only the answer.
+        Requirements:
 
-ORIGINAL QUESTION:
-{question}
+        1. Answer the original question directly.
+        2. Combine evidence across independent retrieval tasks when
+        necessary to resolve multi-hop relationships.
+        3. Use evidence from both original retrieval and follow-up retrieval.
+        4. Do not invent facts, relationships, dates, names, or explanations.
+        5. If the evidence is contradictory or insufficient, explicitly
+        communicate that limitation.
+        6. Cite factual statements inline using this exact format:
 
-RETRIEVED EVIDENCE:
-{evidence}
+        [source:doc_id]
 
-FINAL ANSWER:
-"""
+        7. Use only Evidence IDs supplied below.
+        8. Never invent an Evidence ID.
+        9. Include cited IDs in used_evidence_ids.
+        10. Do not mention internal task IDs or retrieval rounds.
+        11. Keep the answer concise and focused.
+        12. Return only JSON matching the required schema.
+
+        ORIGINAL QUESTION:
+
+        {question}
+
+        ACCUMULATED RETRIEVED EVIDENCE:
+
+        {evidence}
+    """
     )
 
     prompt_text = prompt.format(
@@ -316,64 +362,117 @@ FINAL ANSWER:
 
     answer_chunks: list[str] = []
 
-    async with AsyncClient(host=Config.OLLAMA_BASE_URL) as client:
+    async with AsyncClient(
+        host=Config.OLLAMA_BASE_URL
+    ) as client:
+
         response_stream = await client.chat(
-            model=configuration.get("model", "llama3:latest"),
+            model=configuration.get(
+                "model",
+                Config.OLLAMA_GENERATION_MODEL,
+            ),
             messages=[
                 {
                     "role": "user",
                     "content": prompt_text,
                 }
             ],
+            format=AnswerSynthesis.model_json_schema(),
             options={
-                "temperature": configuration.get("temperature", 0.7),
-                "num_predict": configuration.get("max_tokens", 500),
+                "temperature": configuration.get(
+                    "temperature",
+                    0.2,
+                ),
+                "num_predict": configuration.get(
+                    "max_tokens",
+                    700,
+                ),
             },
             stream=True,
         )
 
         async for response_chunk in response_stream:
+
             token = response_chunk.message.content
 
             if token:
                 answer_chunks.append(token)
 
-    answer = "".join(answer_chunks).strip()
+    raw_response = "".join(
+        answer_chunks
+    ).strip()
 
-    if not answer:
-        answer = (
-            "I couldn't generate a reliable answer from the retrieved evidence."
-        )
+    synthesis = parse_synthesis_response(
+        raw_response=raw_response,
+        available_evidence_ids=available_evidence_ids,
+    )
 
-    elapsed_ms = (time.perf_counter() - started_at) * 1000
+    elapsed_ms = (
+        time.perf_counter() - started_at
+    ) * 1000
+
+    synthesis_payload = synthesis.model_dump(
+        mode="json"
+    )
 
     logger.info(
-        "Final answer generation completed: request_id=%s elapsed_ms=%.2f",
+        "Final answer synthesis completed: request_id=%s "
+        "elapsed_ms=%.2f status=%s cited_evidence=%d",
         request_id,
         elapsed_ms,
+        synthesis.status,
+        len(synthesis.used_evidence_ids),
     )
 
     return {
-        "final_answer": answer,
+        # Preserve the existing final_answer contract.
+        "final_answer": synthesis.answer,
+
+        # Retain structured synthesis for Stage 7 grounding.
+        "answer_synthesis": synthesis_payload,
+
         "trace": [
             {
                 "step": "generate_final_answer",
                 "timestamp": _timestamp(),
                 "input": {
                     "question": question,
-                    "evidence_count": len(evidence),
+                    "evidence_count": len(normalized_evidence),
                     "evidence_assessment": state.get(
-                        "evidence_assessment", {}
+                        "evidence_assessment",
+                        {},
                     ),
-                    "followup_round": state.get("followup_round", 0),
+                    "followup_round": state.get(
+                        "followup_round",
+                        0,
+                    ),
+                    "evidence_ids": sorted(
+                        available_evidence_ids
+                    ),
+                    "evidence_provenance": [
+                        {
+                            "doc_id": item.doc_id,
+                            "source_task_ids": (
+                                item.source_task_ids
+                            ),
+                            "retrieval_rounds": (
+                                item.retrieval_rounds
+                            ),
+                        }
+                        for item in normalized_evidence
+                    ],
                 },
                 "output": {
-                    "final_answer": answer,
+                    "final_answer": synthesis.answer,
+                    "synthesis_status": synthesis.status,
+                    "used_evidence_ids": (
+                        synthesis.used_evidence_ids
+                    ),
+                    "warnings": synthesis.warnings,
                 },
             }
         ],
     }
-
 
 # ---------------------------------------------------------------------
 # Graph construction

@@ -3,8 +3,14 @@ import time
 
 from langchain_core.documents import Document
 
-from agent.task_models import EvidenceRecord, TaskResult, TaskSpec
+from agent.task_models import (
+    EvidenceRecord,
+    TaskResult,
+    TaskSpec,
+)
+
 from agent.rag_system import rag_system
+
 
 logger = logging.getLogger(__name__)
 
@@ -12,12 +18,21 @@ logger = logging.getLogger(__name__)
 def _document_to_evidence(
     document: Document,
     task_id: str,
+    retrieval_round: int = 0,
 ) -> EvidenceRecord:
-    """Convert a retrieved LangChain document into structured evidence."""
+    """
+    Convert a retrieved document into structured evidence.
+
+    Preserve stable document identity, metadata, originating task,
+    and retrieval round.
+    """
 
     document_id = document.metadata.get("id")
 
-    if not isinstance(document_id, str) or not document_id.strip():
+    if (
+        not isinstance(document_id, str)
+        or not document_id.strip()
+    ):
         raise ValueError(
             "Retrieved document is missing a stable string ID."
         )
@@ -27,6 +42,7 @@ def _document_to_evidence(
         content=document.page_content,
         metadata=dict(document.metadata),
         source_task_ids=[task_id],
+        retrieval_rounds=[retrieval_round],
     )
 
 
@@ -37,9 +53,9 @@ async def execute_retrieval_task(
     """
     Execute one retrieval task.
 
-    A task with no retrieved evidence is considered failed so that the
-    orchestrator can distinguish an unsuccessful retrieval from a
-    successful retrieval that produced supporting evidence.
+    A task with no retrieved evidence is considered failed so that
+    the orchestrator can distinguish an unsuccessful retrieval from
+    a successful retrieval that produced supporting evidence.
     """
 
     started_at = time.perf_counter()
@@ -51,13 +67,20 @@ async def execute_retrieval_task(
         )
 
         evidence = [
-            _document_to_evidence(document, task.task_id)
+            _document_to_evidence(
+                document=document,
+                task_id=task.task_id,
+                retrieval_round=task.followup_round,
+            )
             for document in documents
         ]
 
-        elapsed_ms = (time.perf_counter() - started_at) * 1000
+        elapsed_ms = (
+            time.perf_counter() - started_at
+        ) * 1000
 
         if not evidence:
+
             result = TaskResult(
                 task_id=task.task_id,
                 status="failed",
@@ -77,13 +100,17 @@ async def execute_retrieval_task(
         result = TaskResult(
             task_id=task.task_id,
             status="completed",
-            evidence_ids=[item.doc_id for item in evidence],
+            evidence_ids=[
+                item.doc_id
+                for item in evidence
+            ],
             attempts=task.attempts,
             latency_ms=elapsed_ms,
         )
 
         logger.info(
-            "Retrieval task completed: task_id=%s documents=%d elapsed_ms=%.2f",
+            "Retrieval task completed: task_id=%s "
+            "documents=%d elapsed_ms=%.2f",
             task.task_id,
             len(evidence),
             elapsed_ms,
@@ -92,7 +119,10 @@ async def execute_retrieval_task(
         return result, evidence
 
     except Exception as exc:
-        elapsed_ms = (time.perf_counter() - started_at) * 1000
+
+        elapsed_ms = (
+            time.perf_counter() - started_at
+        ) * 1000
 
         logger.exception(
             "Retrieval task failed: task_id=%s",
