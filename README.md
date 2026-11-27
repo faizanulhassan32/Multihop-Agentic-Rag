@@ -282,26 +282,6 @@ The architecture uses configurable execution limits to prevent uncontrolled task
 
 The design prioritizes parallel retrieval while keeping local LLM generation controlled for the target Apple M2 machine with 16 GB unified memory.
 
-### Implementation Progress
-
-The following components have been introduced:
-
-- Centralized backend configuration and execution limits.
-- Structured task, task-result, and evidence models.
-- Task-plan validation and dependency management.
-- Dynamic task scheduling and execution control.
-- Planner and retrieval worker components.
-- Shared RAG system abstraction.
-- LangGraph dynamic dispatch using `Send`.
-- Shared evidence aggregation with provenance preservation.
-- Evidence assessment and targeted follow-up task generation.
-- Adaptive graph routing and supervisor integration.
-
-Component-level tests and graph integration tests have passed. However, the complete end-to-end runtime is still being validated.
-
-**Current integration issue:** The first end-to-end test exposed an API mismatch between `RAGSystem` and the existing `hybrid_search()` implementation. Retrieval workers currently fail because the `reranker` keyword passed by `RAGSystem` is not accepted by the existing retriever. This integration must be corrected and verified before the restructuring can be considered operational.
-
-The end-to-end test must also verify successful task execution, non-empty evidence, evidence assessment, and an evidence-supported final answer. Reaching the final graph node alone does not constitute a successful test.
 
 ### Remaining Work
 
@@ -314,34 +294,23 @@ The restructuring will continue through the following stages:
 
 The restructuring is intended to evolve the existing system incrementally, retaining its local-first design and established retrieval infrastructure rather than replacing the original implementation.
 
+
 ## Development Progress
 
-| Phase | Description | Status |
-|---|---|---|
-| Phase 1 | Project foundation and local RAG setup | Complete |
-| Phase 2 | Supervisor integration and request classification | Complete |
-| Phase 3 | Initial performance optimization and streaming | Complete |
-| Phase 4 | Hybrid retrieval, reranking, and retrieval evaluation | Complete |
-| Phase 5 | Agentic architecture improvements | Planned |
-| Phase 6 | Evidence grounding and answer verification | Planned |
-| Phase 7 | Reliability, observability, and final optimization | Planned |
+| Phase | Phase Title | Description | Status |
+|---|---|---|---|
+| 1 | Existing Architecture and Baseline | Review the original agentic RAG architecture, preserve its core multi-hop workflow, and establish baseline performance using local Ollama models and the existing retrieval infrastructure. | Completed |
+| 2 | Supervisor and Query Classification | Introduce a central supervisor for query classification, scope validation, prompt-injection handling, workflow routing, and final response control. | Completed |
+| 3 | Initial Evaluation Framework | Establish the initial evaluation structure and baseline measurements to support future retrieval and answer-quality improvements. | Deferred |
+| 4 | Retrieval Improvements | Implement hybrid dense and BM25 retrieval, reranking, and end-to-end integration. Query expansion and MMR were deliberately skipped because they did not demonstrate sufficient benefit. | Completed |
+| 5 | Agentic Architecture and Evidence Grounding | Restructure the sequential workflow into a task-based agentic architecture with planning, dependency-aware execution, parallel retrieval, evidence assessment, and adaptive retrieval. Implement grounded answer synthesis, evidence traceability, source attribution, and citations to reduce unsupported claims. | In Progress |
+| 6 | Answer Evaluation and Guardrails | Evaluate answer quality across correctness, hallucination, precision, completeness, and relevance. Retain quantitative metrics such as Exact Match, Token F1, retrieval Recall, and latency, and introduce additional guardrails to improve answer reliability. | Planned |
+| 7 | Frontend Integration and Multi-Organization Support | Integrate a user-facing frontend and evolve the platform for multiple organizations. Introduce organization-aware data isolation, domain-based ingestion, and generic user-driven knowledge ingestion. | Planned |
+| 8 | Reliability and Production Hardening | Improve error handling, recovery, timeout management, and failure handling across agent stages. Strengthen consistency across question types, resource and memory management, and overall system robustness through testing. | Planned |
+| 9 | Observability and Final Optimization | Improve execution tracing and monitoring, measure individual agent-stage performance, and identify bottlenecks. Optimize model calls and workflow execution, improve end-to-end latency, and conduct final system-wide evaluation. | Planned |
 
 **Deferred work:** Query expansion and MMR were considered but skipped because the existing hybrid retrieval and reranking pipeline provides a strong foundation. Additional retrieval techniques can be introduced later if evaluation identifies a need.
 
-A separate retrieval-evaluation phase was skipped because retrieval performance was already evaluated in Phase 4.
-
-## Next Step
-
-Phase 5 will focus on restructuring the existing sequential workflow into a more adaptive agentic architecture.
-
-The planned improvements include:
-- Structured planning and task decomposition.
-- Parallel execution of independent retrieval tasks.
-- Dynamic task routing and dependency management.
-- Evidence assessment and adaptive follow-up retrieval.
-- Controlled reasoning and execution loops.
-
-The goal is to move towards an orchestrator-worker architecture that can plan, delegate, evaluate intermediate results, and determine when additional retrieval is required before generating a final answer.
 
 ## Project Goal
 
