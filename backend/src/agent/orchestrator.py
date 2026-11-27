@@ -137,11 +137,7 @@ def assess_current_evidence(
 def plan_followup_execution(
     state: dict[str, Any],
 ) -> dict[str, Any]:
-    """
-    Create targeted follow-up tasks if evidence gaps remain.
-
-    The total task count and follow-up rounds are strictly bounded.
-    """
+    """Create bounded follow-up tasks for remaining evidence gaps."""
 
     raw_tasks = state.get("tasks", [])
     raw_assessment = state.get("evidence_assessment")
@@ -149,6 +145,7 @@ def plan_followup_execution(
     if not raw_assessment:
         return {
             "tasks": raw_tasks,
+            "followup_tasks_created": False,
             "execution_status": state.get("execution_status", "not_started"),
         }
 
@@ -164,17 +161,29 @@ def plan_followup_execution(
 
     if not followup_tasks:
         logger.info(
-            "No follow-up tasks created: round=%d max_rounds=%d",
+            "No follow-up tasks created: round=%d max_rounds=%d task_count=%d",
             current_round,
             Config.MAX_FOLLOWUP_ROUNDS,
+            len(raw_tasks),
         )
 
         return {
             "tasks": raw_tasks,
+            "followup_tasks_created": False,
             "execution_status": get_execution_status([
                 TaskSpec.model_validate(task)
                 for task in raw_tasks
             ]),
+            "trace": [
+                {
+                    "step": "plan_followup_execution",
+                    "timestamp": _timestamp(),
+                    "output": {
+                        "followup_tasks_created": False,
+                        "reason": "No eligible follow-up tasks could be created.",
+                    },
+                }
+            ],
         }
 
     updated_tasks = [
@@ -190,11 +199,9 @@ def plan_followup_execution(
     )
 
     return {
-        "tasks": [
-            task.model_dump()
-            for task in updated_tasks
-        ],
+        "tasks": [task.model_dump() for task in updated_tasks],
         "followup_round": current_round + 1,
+        "followup_tasks_created": True,
         "execution_status": get_execution_status(updated_tasks),
         "trace": [
             {
@@ -202,6 +209,7 @@ def plan_followup_execution(
                 "timestamp": _timestamp(),
                 "output": {
                     "followup_round": current_round + 1,
+                    "followup_tasks_created": True,
                     "created_task_ids": [
                         task.task_id for task in followup_tasks
                     ],
@@ -209,6 +217,41 @@ def plan_followup_execution(
             }
         ],
     }
+
+
+def route_after_followup(
+    state: dict[str, Any],
+) -> str:
+    """
+    Return to retrieval only when new follow-up tasks were actually created.
+
+    This prevents the graph from repeatedly scheduling an unchanged,
+    already-terminal task list.
+    """
+    if not state.get("followup_tasks_created", False):
+        return "generate_final_answer"
+
+    tasks = [
+        task if isinstance(task, TaskSpec)
+        else TaskSpec.model_validate(task)
+        for task in state.get("tasks", [])
+    ]
+
+    followup_tasks = [
+        task for task in tasks
+        if task.followup_round > 0
+    ]
+
+    has_pending_work = any(
+        task.status in {"pending", "running"}
+        for task in followup_tasks
+    )
+
+    return (
+        "prepare_retrieval_batch"
+        if has_pending_work
+        else "generate_final_answer"
+    )
 
 
 def route_after_retrieval(

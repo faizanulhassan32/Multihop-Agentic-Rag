@@ -29,6 +29,7 @@ from agent.orchestrator import (
     plan_followup_execution,
     route_after_retrieval,
     route_after_assessment,
+    route_after_followup,
 )
 from agent.task_dispatcher import (
     prepare_retrieval_batch,
@@ -489,9 +490,13 @@ workflow.add_conditional_edges(
 )
 
 # Follow-up tasks return to the same bounded retrieval scheduler.
-workflow.add_edge(
+workflow.add_conditional_edges(
     "plan_followup_execution",
-    "prepare_retrieval_batch",
+    route_after_followup,
+    {
+        "prepare_retrieval_batch": "prepare_retrieval_batch",
+        "generate_final_answer": "generate_final_answer",
+    },
 )
 
 # Supervisor owns finalization.

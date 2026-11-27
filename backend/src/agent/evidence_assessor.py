@@ -1,10 +1,7 @@
 import re
 from typing import Any, Sequence
 
-from agent.evidence_models import (
-    EvidenceAssessment,
-    TaskEvidenceAssessment,
-)
+from agent.evidence_models import EvidenceAssessment, TaskEvidenceAssessment
 from agent.task_models import EvidenceRecord, TaskSpec
 
 
@@ -16,14 +13,9 @@ _STOP_WORDS = {
     "what", "when", "where", "which", "who", "whom", "why", "with",
 }
 
-_ENTITY_EXCLUSIONS = {
-    "who", "what", "when", "where", "why", "how",
-    "which", "whose", "whom",
-}
-
 
 def _tokens(value: str) -> set[str]:
-    """Extract normalized meaningful terms from text."""
+    """Return normalized, meaningful terms."""
     return {
         token
         for token in re.findall(r"[a-z0-9]+", value.lower())
@@ -31,56 +23,8 @@ def _tokens(value: str) -> set[str]:
     }
 
 
-def _extract_required_entities(question: str) -> set[str]:
-    """
-    Extract likely named entities from a task question.
-
-    This intentionally uses a lightweight heuristic rather than an NER model.
-    It recognizes:
-    - Internal capitalization: SpaceX, YouTube, iPhone
-    - Acronyms: NASA, IBM
-    - Capitalized words appearing after the first question word
-
-    The first word is excluded to avoid treating question starters such as
-    'Who' or 'What' as entities.
-    """
-    words = re.findall(r"\b[A-Za-z][A-Za-z0-9]*\b", question)
-
-    entities = set()
-
-    for index, word in enumerate(words):
-        if index == 0:
-            continue
-
-        if word.lower() in _ENTITY_EXCLUSIONS:
-            continue
-
-        is_internal_capitalization = bool(
-            re.search(r"[a-z][A-Z]", word)
-        )
-
-        is_acronym = (
-            len(word) >= 2
-            and word.isupper()
-        )
-
-        is_capitalized = (
-            word[0].isupper()
-            and word[1:].islower()
-        )
-
-        if (
-            is_internal_capitalization
-            or is_acronym
-            or is_capitalized
-        ):
-            entities.add(word.lower())
-
-    return entities
-
-
 def _root_task_id(task_id: str) -> str:
-    """Resolve follow-up task IDs to their original task IDs."""
+    """Map follow-up task IDs back to their original task."""
     return re.sub(r"(?:_followup_\d+)+$", "", task_id)
 
 
@@ -110,26 +54,23 @@ def assess_evidence(
     minimum_coverage: float = 0.35,
 ) -> EvidenceAssessment:
     """
-    Assess accumulated evidence against the original tasks.
+    Estimate task-level retrieval coverage.
 
-    Sufficiency requires:
-    1. Evidence exists.
-    2. Required named entities are present.
-    3. Lexical coverage meets the configured threshold.
+    This is a lightweight retrieval heuristic, not semantic entailment.
+    Named-entity detection is deliberately not used as a mandatory gate:
+    capitalization-based entity extraction is unreliable across domains.
 
-    This is a retrieval-quality heuristic, not semantic entailment.
+    Evidence from follow-up tasks is attributed to the corresponding
+    original task using the root task ID.
     """
     if not 0.0 <= minimum_coverage <= 1.0:
-        raise ValueError(
-            "minimum_coverage must be between 0 and 1."
-        )
+        raise ValueError("minimum_coverage must be between 0 and 1.")
 
     normalized_tasks = _normalize_tasks(tasks)
     normalized_evidence = _normalize_evidence(evidence)
 
     original_tasks = [
-        task
-        for task in normalized_tasks
+        task for task in normalized_tasks
         if task.followup_round == 0
     ]
 
@@ -140,11 +81,12 @@ def assess_evidence(
             task_assessments=[],
             gap_task_ids=[],
             evidence_count=len(normalized_evidence),
+            assessment_method="lexical_coverage",
             reason="No original planned tasks were available for assessment.",
         )
 
-    assessments = []
-    gap_task_ids = []
+    assessments: list[TaskEvidenceAssessment] = []
+    gap_task_ids: list[str] = []
 
     for task in original_tasks:
         root_id = _root_task_id(task.task_id)
@@ -153,88 +95,48 @@ def assess_evidence(
             item
             for item in normalized_evidence
             if any(
-                _root_task_id(source_task_id) == root_id
-                for source_task_id in item.source_task_ids
+                _root_task_id(source_id) == root_id
+                for source_id in item.source_task_ids
             )
         ]
 
         query_terms = _tokens(
             f"{task.question} {task.retrieval_query}"
         )
-
-        required_entities = _extract_required_entities(
-            task.question
+        evidence_terms = _tokens(
+            " ".join(item.content for item in task_evidence)
         )
 
-        evidence_text = " ".join(
-            item.content for item in task_evidence
-        )
+        matched_terms = sorted(query_terms & evidence_terms)
+        missing_terms = sorted(query_terms - evidence_terms)
 
-        evidence_terms = _tokens(evidence_text)
-
-        matched_terms = sorted(
-            query_terms & evidence_terms
-        )
-
-        missing_terms = sorted(
-            query_terms - evidence_terms
-        )
-
-        matched_entities = sorted(
-            required_entities & evidence_terms
-        )
-
-        missing_entities = sorted(
-            required_entities - evidence_terms
-        )
-
-        lexical_coverage = (
+        coverage = (
             len(matched_terms) / len(query_terms)
             if query_terms
-            else 0.0
+            else (1.0 if task_evidence else 0.0)
         )
-
-        entity_coverage = (
-            len(matched_entities) / len(required_entities)
-            if required_entities
-            else 1.0
-        )
-
-        # Entity coverage is mandatory when the task contains
-        # recognizable named entities.
-        entities_satisfied = not missing_entities
 
         if not task_evidence:
             status = "insufficient"
             reason = "No evidence was retrieved for this task."
-
-        elif not entities_satisfied:
+        elif coverage == 0.0:
             status = "insufficient"
-            reason = (
-                "Required named entities are missing from retrieved evidence: "
-                + ", ".join(missing_entities)
-            )
-
-        elif lexical_coverage < minimum_coverage:
+            reason = "Retrieved evidence has no lexical overlap with the task."
+        elif coverage < minimum_coverage:
             status = "partial"
             reason = (
-                "Evidence contains the required entities but does not meet "
-                "the lexical coverage threshold."
+                "Some query terms appear in the evidence, but coverage "
+                "is below the configured threshold."
             )
-
         else:
             status = "sufficient"
             reason = (
-                "Required entities are present and lexical coverage "
-                "meets the configured threshold."
+                "Retrieved evidence meets the configured lexical "
+                "coverage threshold."
             )
 
         if status != "sufficient":
             gap_task_ids.append(task.task_id)
-
-        # Entity coverage is incorporated into the score so that
-        # missing key entities reduce the score significantly.
-        coverage = lexical_coverage * entity_coverage
 
         assessments.append(
             TaskEvidenceAssessment(
@@ -243,9 +145,7 @@ def assess_evidence(
                 coverage_score=coverage,
                 matched_terms=matched_terms,
                 missing_terms=missing_terms,
-                evidence_ids=[
-                    item.doc_id for item in task_evidence
-                ],
+                evidence_ids=[item.doc_id for item in task_evidence],
                 reason=reason,
             )
         )
@@ -255,30 +155,18 @@ def assess_evidence(
     ) / len(assessments)
 
     sufficient_count = sum(
-        item.status == "sufficient"
-        for item in assessments
+        item.status == "sufficient" for item in assessments
     )
 
-    if sufficient_count == len(assessments) and normalized_evidence:
+    if sufficient_count == len(assessments):
         overall_status = "sufficient"
-        reason = (
-            "All original tasks meet entity and lexical coverage requirements."
-        )
-
-    elif sufficient_count > 0 or any(
-        item.coverage_score > 0
-        for item in assessments
-    ):
+        reason = "All original tasks meet the lexical coverage threshold."
+    elif sufficient_count > 0 or overall_coverage > 0:
         overall_status = "partial"
-        reason = (
-            "Some evidence coverage exists, but one or more task gaps remain."
-        )
-
+        reason = "Some task evidence exists, but one or more gaps remain."
     else:
         overall_status = "insufficient"
-        reason = (
-            "Retrieved evidence does not adequately cover the original tasks."
-        )
+        reason = "Retrieved evidence does not cover the original tasks."
 
     return EvidenceAssessment(
         status=overall_status,
@@ -286,6 +174,6 @@ def assess_evidence(
         task_assessments=assessments,
         gap_task_ids=gap_task_ids,
         evidence_count=len(normalized_evidence),
-        assessment_method="entity_aware_lexical_coverage",
+        assessment_method="lexical_coverage",
         reason=reason,
     )

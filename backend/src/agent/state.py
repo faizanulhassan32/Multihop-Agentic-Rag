@@ -148,6 +148,7 @@ class MultiHopState(TypedDict, total=False):
     execution_status: str
     execution_limits: dict[str, int]
     followup_round: int
+    followup_tasks_created: bool
 
     # Evidence evaluation and response validation
     evidence_assessment: dict[str, Any]
