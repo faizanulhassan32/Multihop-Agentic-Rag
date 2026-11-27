@@ -2,13 +2,13 @@
 
 A locally running, agentic Retrieval-Augmented Generation (RAG) system designed to answer complex questions requiring information retrieval and reasoning across multiple documents.
 
-The project explores multi-hop question answering through question decomposition, hybrid retrieval, reranking, and evidence-based answer generation, using locally hosted language models.
+The project explores multi-hop question answering through task planning, hybrid retrieval, reranking, evidence assessment, adaptive retrieval, and evidence-grounded answer generation, using locally hosted language models.
 
 ## Overview
 
 Traditional RAG systems often struggle with questions that require connecting information across multiple documents.
 
-This project addresses these limitations through a multi-hop workflow that decomposes complex questions, retrieves relevant evidence, and generates answers from the collected context.
+This project addresses these limitations through a multi-hop workflow that dynamically plans retrieval tasks, gathers relevant evidence, evaluates evidence coverage, and generates answers grounded in the collected context.
 
 The system runs locally using Ollama, without relying on hosted inference APIs.
 
@@ -17,6 +17,7 @@ The system runs locally using Ollama, without relying on hosted inference APIs.
 - **Multi-hop reasoning:** Connecting information spread across multiple documents.
 - **Retrieval limitations:** Combining semantic and keyword-based search.
 - **Inference latency:** Reducing unnecessary sequential LLM calls.
+- **Evidence reliability:** Preserving evidence provenance and validating generated claims against retrieved sources.
 - **Local resource constraints:** Optimizing inference and retrieval for local hardware.
 
 ## Technology Stack
@@ -50,20 +51,24 @@ Dataset files, embeddings, and local index artifacts are excluded from Git.
 
 ## Agent Workflow
 
-The current LangGraph workflow follows a predefined multi-hop execution path:
+The current LangGraph workflow uses a dynamic, task-based orchestrator-worker architecture:
 
-1. **Supervisor classification:** Classifies requests and handles invalid or out-of-scope inputs.
-2. **Question decomposition:** Breaks complex questions into smaller sub-questions.
-3. **Query rewriting:** Refines sub-questions for retrieval.
-4. **Sequential retrieval and reasoning:** Retrieves evidence and generates intermediate answers for each sub-question.
-5. **Final answer generation:** Combines intermediate answers and supporting evidence.
-6. **Supervisor finalization:** Handles the final response.
+1. **Supervisor classification:** Classifies requests and handles invalid, out-of-scope, and prompt-injection inputs.
+2. **Task planning:** Converts accepted questions into structured retrieval tasks with dependencies.
+3. **Dependency-aware scheduling:** Selects ready tasks while enforcing execution and concurrency limits.
+4. **Parallel retrieval:** Dispatches independent tasks to workers using the existing hybrid retrieval and reranking pipeline.
+5. **Evidence aggregation:** Merges retrieved documents using stable IDs while preserving task provenance and retrieval-round metadata.
+6. **Evidence assessment:** Evaluates evidence coverage against the original information requirements.
+7. **Bounded evidence recovery:** Creates targeted follow-up retrieval tasks when gaps remain and the configured follow-up budget permits.
+8. **Answer synthesis:** Produces a structured answer from accumulated evidence.
+9. **Grounding validation:** Checks answer claims against retrieved evidence and applies a fail-closed response policy when support is insufficient or validation fails.
+10. **Supervisor finalization:** Returns the validated result through the supervisor's final response path.
 
-The current workflow is structured and sequential. More advanced planning, evidence sufficiency checks, and adaptive reasoning are not yet implemented.
+Independent retrieval tasks can run concurrently. LLM generation remains controlled for the local hardware environment. The workflow no longer depends on sequential intermediate-answer generation for every sub-question.
 
 ## Performance Optimization
 
-The existing workflow was optimized to reduce unnecessary LLM calls and improve response latency.
+The original workflow was optimized to reduce unnecessary LLM calls and improve response latency.
 
 Key improvements include:
 - Reduced intermediate generation calls.
@@ -111,13 +116,13 @@ These results are preliminary and require validation on a larger evaluation set.
 
 ## Agentic Architecture Restructuring
 
-**Status: In Progress**
+**Status: Completed**
 
-Phase 5 restructures the existing sequential multi-hop workflow into a dynamic, planner-driven agentic RAG architecture.
+Phase 5 evolved the original sequential multi-hop workflow into a dynamic, planner-driven agentic RAG architecture.
 
-Instead of following a predefined sequence of retrieval and reasoning steps, the new architecture introduces a central orchestrator that plans tasks, manages dependencies, dispatches retrieval workers, evaluates collected evidence, and determines whether additional retrieval is required.
+The orchestrator plans retrieval tasks, manages dependencies, dispatches independent workers, aggregates evidence, evaluates evidence gaps, and schedules bounded follow-up retrieval when needed. Answer synthesis and grounding validation are integrated into the LangGraph workflow before supervisor finalization.
 
-The objective is to build an orchestrator-worker architecture while preserving the existing retrieval infrastructure, supervisor, and local model setup.
+The implementation preserves the existing hybrid retrieval infrastructure, supervisor, local model setup, and token-streaming frontend contract.
 
 ### Architecture Overview
 
@@ -132,9 +137,9 @@ The architecture consists of the following components:
 7. **Evidence Aggregation:** Collects and deduplicates retrieved documents while preserving their source-task provenance.
 8. **Evidence Assessor:** Evaluates whether the collected evidence sufficiently covers the original information requirements and identifies missing information.
 9. **Follow-up Planner:** Creates targeted retrieval tasks when evidence gaps remain, subject to configured execution limits.
-10. **Answer Synthesis:** Generates the final answer using accumulated evidence.
-11. **Grounding and Validation:** Checks answer support and completeness before supervisor finalization.
-
+10. **Answer Synthesis:** Generates a structured final answer using accumulated evidence and known evidence IDs.
+11. **Grounding and Validation:** Checks generated claims against retrieved evidence and applies the grounding policy.
+12. **Supervisor Finalization:** Returns the validated answer or safe abstention to the user.
 
 ### High-Level Architecture Flow
 
@@ -171,7 +176,6 @@ flowchart TD
     O --> Z
     Z --> P["Final Response"]
 ```
-
 
 ### Sequential Execution: Query to Answer
 
@@ -265,35 +269,69 @@ Evidence is maintained as structured records containing document IDs, content, m
 
 When evidence gaps remain, the follow-up planner can create additional targeted retrieval tasks. Their results are added to the shared evidence collection and reassessed against the original information requirements.
 
-The current evidence assessment uses lexical term coverage as a retrieval diagnostic. It is not a semantic entailment or factual-confidence measure. Stronger grounding and answer verification are part of the subsequent implementation work.
+The evidence assessor uses evidence-coverage diagnostics to identify retrieval gaps; this assessment is not itself a factual-entailment score.
+
+Final answer grounding is handled separately by a local LLM claim-to-evidence validator. The validator checks that supported claims reference known evidence IDs and distinguishes supported, partially supported, unsupported, and validation-error outcomes.
+
+- **Supported:** The answer proceeds to supervisor finalization.
+- **Partially supported:** Supported claims are retained while unsupported content is excluded.
+- **Unsupported:** The system returns a transparent abstention response.
+- **Validation error:** The system fails closed with a safe response.
+
+The grounding node is integrated into the LangGraph path after answer synthesis and before supervisor finalization. No unbounded retrieval loop is introduced.
 
 ### Execution Controls
 
 The architecture uses configurable execution limits to prevent uncontrolled task creation and resource consumption.
 
-| Setting | Initial Value | Purpose |
-|---|---:|---|
-| `MAX_PLANNED_TASKS` | 4 | Maximum planned tasks |
-| `MAX_FOLLOWUP_ROUNDS` | 1 | Maximum adaptive retrieval rounds |
-| `MAX_RETRIEVAL_CONCURRENCY` | 3 | Concurrent retrieval workers |
-| `MAX_RETRIEVAL_RETRIES` | 1 | Intended retrieval retry limit |
-| `TASK_RERANK_LIMIT` | 5 | Reranked documents per task |
-| `MAX_CONCURRENT_GENERATIONS` | 1 | Concurrent generation limit |
+| Control | Behavior |
+|---|---|
+| Planned task limit | Caps the number of tasks created for an original question. |
+| Follow-up round limit | Bounds adaptive retrieval and prevents an open-ended recovery loop. |
+| Retrieval concurrency | Caps the number of retrieval workers executing at the same time. |
+| Retrieval candidate and rerank limits | Controls the evidence volume passed through retrieval and reranking. |
+| Generation concurrency and timeout | Keeps local model usage controlled and bounds model-call duration. |
 
-The design prioritizes parallel retrieval while keeping local LLM generation controlled for the target Apple M2 machine with 16 GB unified memory.
+The runtime limits are configurable in the backend. They prioritize parallel retrieval while keeping local LLM generation controlled for the target Apple M2 machine with 16 GB unified memory.
 
+### Phase 5 Completion
 
-### Remaining Work
+Phase 5 implementation is complete:
 
-The restructuring will continue through the following stages:
+- **Stage 5: Evidence assessment and adaptive retrieval**
+  - Integrated task planning and dependency-aware scheduling.
+  - Implemented parallel retrieval through the existing hybrid retrieval and reranking pipeline.
+  - Added evidence aggregation and deduplication using stable document IDs.
+  - Preserved task provenance and retrieval-round metadata.
+  - Integrated evidence-gap assessment and bounded follow-up retrieval.
 
-- **Stage 5: Evidence assessment and adaptive retrieval:** Complete and validate retrieval integration, evidence aggregation, and bounded follow-up execution.
-- **Stage 6: Answer synthesis and grounding:** Generate answers from structured evidence, preserve provenance, and implement grounding and completeness validation.
-- **Stage 7: Supervisor integration and final graph:** Verify routing, finalization, error handling, and compatibility with the existing token-streaming frontend.
-- **Stage 8: End-to-end integration and evaluation:** Validate the complete workflow using local models and indexes, test failure scenarios, and compare latency and answer quality against the existing baseline.
+- **Stage 6: Answer synthesis and grounding**
+  - Implemented structured answer synthesis from accumulated evidence.
+  - Preserved evidence references and provenance in the synthesis context.
+  - Added claim-to-evidence grounding validation.
+  - Added handling for supported, partially supported, unsupported, and invalid synthesis outcomes.
 
-The restructuring is intended to evolve the existing system incrementally, retaining its local-first design and established retrieval infrastructure rather than replacing the original implementation.
+- **Stage 7: Grounding policy and final graph integration**
+  - Integrated grounding validation into the LangGraph execution path.
+  - Added conditional routing based on grounding results.
+  - Preserved supported claims and excluded unsupported content.
+  - Implemented fail-closed behavior for unsupported answers and validation errors.
+  - Integrated the validated result with supervisor finalization.
 
+**Backend verification:**
+
+The complete backend test suite passes **72 of 72 tests**, covering:
+
+- Hybrid retrieval and reciprocal rank fusion.
+- BM25 and ChromaDB index synchronization.
+- Task execution and evidence provenance.
+- Evidence assessment and bounded follow-up recovery.
+- Stage 6 answer synthesis and grounding.
+- Stage 7 LangGraph grounding integration and response policies.
+- Native Ollama structured token streaming.
+- Vector-store integration.
+
+Phase 5 is closed from an implementation perspective. Broader answer-quality evaluation and benchmark comparisons remain part of the project roadmap.
 
 ## Development Progress
 
@@ -303,14 +341,13 @@ The restructuring is intended to evolve the existing system incrementally, retai
 | 2 | Supervisor and Query Classification | Introduce a central supervisor for query classification, scope validation, prompt-injection handling, workflow routing, and final response control. | Completed |
 | 3 | Initial Evaluation Framework | Establish the initial evaluation structure and baseline measurements to support future retrieval and answer-quality improvements. | Deferred |
 | 4 | Retrieval Improvements | Implement hybrid dense and BM25 retrieval, reranking, and end-to-end integration. Query expansion and MMR were deliberately skipped because they did not demonstrate sufficient benefit. | Completed |
-| 5 | Agentic Architecture and Evidence Grounding | Restructure the sequential workflow into a task-based agentic architecture with planning, dependency-aware execution, parallel retrieval, evidence assessment, and adaptive retrieval. Implement grounded answer synthesis, evidence traceability, source attribution, and citations to reduce unsupported claims. | In Progress |
+| 5 | Agentic Architecture and Evidence Grounding | Complete the task-based agentic workflow with planning, dependency-aware scheduling, parallel hybrid retrieval, evidence aggregation and provenance, evidence assessment, bounded follow-up retrieval, structured answer synthesis, claim-to-evidence grounding, and fail-closed validation integrated into LangGraph and supervisor finalization. | Completed |
 | 6 | Answer Evaluation and Guardrails | Evaluate answer quality across correctness, hallucination, precision, completeness, and relevance. Retain quantitative metrics such as Exact Match, Token F1, retrieval Recall, and latency, and introduce additional guardrails to improve answer reliability. | Planned |
 | 7 | Frontend Integration and Multi-Organization Support | Integrate a user-facing frontend and evolve the platform for multiple organizations. Introduce organization-aware data isolation, domain-based ingestion, and generic user-driven knowledge ingestion. | Planned |
 | 8 | Reliability and Production Hardening | Improve error handling, recovery, timeout management, and failure handling across agent stages. Strengthen consistency across question types, resource and memory management, and overall system robustness through testing. | Planned |
 | 9 | Observability and Final Optimization | Improve execution tracing and monitoring, measure individual agent-stage performance, and identify bottlenecks. Optimize model calls and workflow execution, improve end-to-end latency, and conduct final system-wide evaluation. | Planned |
 
 **Deferred work:** Query expansion and MMR were considered but skipped because the existing hybrid retrieval and reranking pipeline provides a strong foundation. Additional retrieval techniques can be introduced later if evaluation identifies a need.
-
 
 ## Project Goal
 
