@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 """
 Controlled retrieval strategy experiment for the Phase 5 RAG system.
@@ -16,7 +15,7 @@ Read-only:
 - Does not invoke the LangGraph answering workflow.
 
 Run from the backend directory:
-    python evaluation/retrieval_strategy_experiments.py
+    python tests/phase5_retrieval_strategy_experiments.py
 """
 
 from __future__ import annotations
@@ -36,7 +35,8 @@ from types import SimpleNamespace
 from typing import Any
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
-EVALUATION_DIR = Path(__file__).resolve().parent
+TESTS_DIR = Path(__file__).resolve().parent
+
 sys.path.insert(0, str(BACKEND_DIR / "src"))
 
 import chromadb
@@ -55,11 +55,11 @@ from services.reranker_client import RerankerClient
 
 
 DEFAULT_QUESTIONS = (
-    EVALUATION_DIR / "data" / "hotpotqa_retrieval_eval_20.jsonl"
+    TESTS_DIR / "data" / "hotpotqa_retrieval_eval_20.jsonl"
 )
 
 DEFAULT_OUTPUT_DIR = (
-    EVALUATION_DIR / "results" / "retrieval_strategy_experiments"
+    TESTS_DIR / "results" / "retrieval_strategy_experiments"
 )
 
 RERANKER_MAX_DOCUMENTS = 20

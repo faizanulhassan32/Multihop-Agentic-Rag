@@ -11,8 +11,8 @@ Read-only with respect to the application and retrieval indexes:
 - Calculates Exact Match and token F1 when the dataset has an "answer" field.
 
 Run from the backend directory:
-    python evaluation/phase4_3_agent_eval.py --limit 1
-    python evaluation/phase4_3_agent_eval.py
+    python tests/phase4_3_agent_eval.py --limit 1
+    python tests/phase4_3_agent_eval.py
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ from unittest.mock import patch
 # ---------------------------------------------------------------------
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
-EVALUATION_DIR = Path(__file__).resolve().parent
+TESTS_DIR = Path(__file__).resolve().parent
 
 sys.path.insert(0, str(BACKEND_DIR / "src"))
 
@@ -53,11 +53,11 @@ graph_module = __import__("agent.graph", fromlist=["graph"])
 from config import Config
 
 DEFAULT_QUESTIONS = (
-    EVALUATION_DIR / "data" / "hotpotqa_retrieval_eval_20.jsonl"
+    TESTS_DIR / "data" / "hotpotqa_retrieval_eval_20.jsonl"
 )
 
 DEFAULT_OUTPUT_DIR = (
-    EVALUATION_DIR / "results" / "phase4_3_agent_eval"
+    TESTS_DIR / "results" / "phase4_3_agent_eval"
 )
 
 

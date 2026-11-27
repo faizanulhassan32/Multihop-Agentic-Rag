@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 """
 Phase 4.2: Evaluate the existing Dense + BM25 + RRF + Reranker pipeline.
@@ -10,8 +9,8 @@ Read-only evaluation:
 - Uses the existing RerankerClient.
 - Does not execute the LangGraph question-answering workflow.
 
-Expected evaluation JSONL:
-backend/evaluation/data/hotpotqa_retrieval_eval_20.jsonl
+Expected test JSONL:
+backend/tests/data/hotpotqa_retrieval_eval_20.jsonl
 
 Each question must contain:
 {
@@ -54,7 +53,7 @@ from typing import Any
 # ---------------------------------------------------------------------
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
-EVALUATION_DIR = Path(__file__).resolve().parent
+TESTS_DIR = Path(__file__).resolve().parent
 
 sys.path.insert(0, str(BACKEND_DIR / "src"))
 
@@ -74,11 +73,11 @@ from services.reranker_client import RerankerClient
 
 
 DEFAULT_QUESTIONS = (
-    EVALUATION_DIR / "data" / "hotpotqa_retrieval_eval_20.jsonl"
+    TESTS_DIR / "data" / "hotpotqa_retrieval_eval_20.jsonl"
 )
 
 DEFAULT_OUTPUT_DIR = (
-    EVALUATION_DIR / "results" / "phase4_2_retrieval_eval"
+    TESTS_DIR / "results" / "phase4_2_retrieval_eval"
 )
 
 MAX_RERANKER_DOCUMENTS = 20

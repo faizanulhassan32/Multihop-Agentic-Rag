@@ -2,7 +2,7 @@
 """Deterministically exercise Phase 5 follow-up retrieval through the live graph.
 
 Run from backend:
-    PYTHONPATH=src python evaluation/phase5_evidence_recovery_integration.py
+    PYTHONPATH=src python tests/phase5_evidence_recovery_integration.py
 
 The classifier, task planner, retrieval stack (Chroma + BM25 + reranker),
 follow-up planner, final answer model, and LangGraph routing remain live.
@@ -10,6 +10,7 @@ Only the first evidence assessment is controlled: it is forced to report a
 specific gap so the test must execute the recovery path. The second assessment
 uses the real lexical evidence assessor.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -24,18 +25,22 @@ from typing import Any
 from unittest.mock import patch
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
+TESTS_DIR = Path(__file__).resolve().parent
+
 sys.path.insert(0, str(BACKEND_DIR / "src"))
 
 from config import Config  # noqa: E402
-from ingestion.preprocess import PROCESSED_SAMPLE_PATH  # noqa: E402
 
+TEST_QUESTIONS_PATH = (
+    TESTS_DIR / "data" / "hotpotqa_retrieval_eval_20.jsonl"
+)
 
 def _load_default_question() -> dict[str, Any]:
-    with PROCESSED_SAMPLE_PATH.open(encoding="utf-8") as handle:
+    with TEST_QUESTIONS_PATH.open(encoding="utf-8") as handle:
         for line in handle:
             if line.strip():
                 return json.loads(line)
-    raise RuntimeError(f"No questions found in {PROCESSED_SAMPLE_PATH}")
+    raise RuntimeError(f"No questions found in {TEST_QUESTIONS_PATH}")
 
 
 def _verify_indexes() -> dict[str, str]:

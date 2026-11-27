@@ -17,6 +17,7 @@ from typing import Dict, List, Set
 
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
+TESTS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(BACKEND_DIR / "src"))
 
 import chromadb
@@ -30,9 +31,7 @@ from ingestion.preprocess import CHUNKS_PATH, PROCESSED_SAMPLE_PATH
 
 
 TOKEN_PATTERN = re.compile(r"\w+", re.UNICODE)
-DEFAULT_OUTPUT = (
-    Path(__file__).resolve().parent / "results" / "phase4_1_dense_vs_hybrid.json"
-)
+DEFAULT_OUTPUT = TESTS_DIR / "results" / "phase4_1_dense_vs_hybrid.json"
 
 
 def _normalize(text: str) -> str:

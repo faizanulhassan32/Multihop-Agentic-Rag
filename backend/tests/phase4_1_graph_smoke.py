@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
+TESTS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(BACKEND_DIR / "src"))
 
 import chromadb
@@ -19,20 +20,23 @@ from langchain_core.prompts import ChatPromptTemplate
 
 graph_module = importlib.import_module("agent.graph")
 from config import Config
-from ingestion.preprocess import PROCESSED_SAMPLE_PATH
 
 
-DEFAULT_OUTPUT = (
-    Path(__file__).resolve().parent / "results" / "phase4_1_graph_smoke.json"
+TEST_QUESTIONS_PATH = (
+    Path(__file__).resolve().parent
+    / "data"
+    / "hotpotqa_retrieval_eval_20.jsonl"
 )
+
+DEFAULT_OUTPUT = TESTS_DIR / "results" / "phase4_1_graph_smoke.json"
 
 
 def _first_question():
-    with PROCESSED_SAMPLE_PATH.open(encoding="utf-8") as questions_file:
+    with TEST_QUESTIONS_PATH.open(encoding="utf-8") as questions_file:
         for line in questions_file:
             if line.strip():
                 return json.loads(line)
-    raise RuntimeError(f"No processed questions found at {PROCESSED_SAMPLE_PATH}.")
+    raise RuntimeError(f"No processed questions found at {TEST_QUESTIONS_PATH}.")
 
 
 def _verify_indexes_exist():
