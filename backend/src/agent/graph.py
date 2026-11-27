@@ -43,6 +43,7 @@ from agent.answer_synthesis import (
     normalize_evidence,
     parse_synthesis_response,
 )
+from agent.grounding_validator import validate_answer_grounding
 
 load_dotenv()
 
@@ -474,6 +475,182 @@ async def generate_final_answer(
         ],
     }
 
+
+# ---------------------------------------------------------------------
+# Stage 7: Grounding validation and answer policy
+# ---------------------------------------------------------------------
+
+async def validate_final_answer_grounding(
+    state: MultiHopState,
+    config: RunnableConfig,
+) -> Dict[str, Any]:
+    """
+    Validate the synthesized answer against accumulated evidence.
+    """
+
+    request_id = _request_id(config)
+    answer = state.get("final_answer", "")
+    evidence = state.get("evidence", [])
+
+    started_at = time.perf_counter()
+
+    result = await validate_answer_grounding(
+        answer=answer,
+        evidence=evidence,
+        question=state.get("original_question", ""),
+    )
+
+    elapsed_ms = (
+        time.perf_counter() - started_at
+    ) * 1000
+
+    result_payload = result.model_dump(mode="json")
+
+    logger.info(
+        "Grounding validation completed: request_id=%s "
+        "status=%s supported_claims=%d unsupported_claims=%d "
+        "elapsed_ms=%.2f",
+        request_id,
+        result.status,
+        len(result.supported_claims),
+        len(result.unsupported_claims),
+        elapsed_ms,
+    )
+
+    return {
+        "grounding_result": result_payload,
+        "trace": [
+            {
+                "step": "validate_final_answer_grounding",
+                "timestamp": _timestamp(),
+                "input": {
+                    "answer": answer,
+                    "evidence_count": len(evidence),
+                },
+                "output": {
+                    "status": result.status,
+                    "supported_claim_count": len(
+                        result.supported_claims
+                    ),
+                    "unsupported_claim_count": len(
+                        result.unsupported_claims
+                    ),
+                    "supporting_evidence_ids": (
+                        result.supporting_evidence_ids
+                    ),
+                    "reason": result.reason,
+                },
+            }
+        ],
+    }
+
+
+def route_after_grounding_validation(
+    state: MultiHopState,
+) -> Literal[
+    "supervisor_finalize",
+    "apply_grounding_policy",
+]:
+    """
+    Only fully supported answers proceed unchanged.
+    All other results require the grounding policy.
+    """
+
+    grounding_result = state.get("grounding_result", {})
+    status = grounding_result.get("status")
+
+    if status == "supported":
+        return "supervisor_finalize"
+
+    return "apply_grounding_policy"
+
+
+async def apply_grounding_policy(
+    state: MultiHopState,
+    config: RunnableConfig,
+) -> Dict[str, Any]:
+    """
+    Preserve supported claims and citations from partially supported
+    answers. Abstain when no supported claims are available.
+
+    Validation errors and insufficient evidence fail closed.
+    """
+
+    grounding_result = state.get("grounding_result", {})
+    status = grounding_result.get("status", "validation_error")
+
+    supported_claims = grounding_result.get(
+        "supported_claims",
+        [],
+    )
+
+    grounded_statements = []
+
+    if status == "partially_supported":
+        for claim in supported_claims:
+            claim_text = str(
+                claim.get("claim", "")
+            ).strip()
+
+            evidence_ids = claim.get(
+                "supporting_evidence_ids",
+                [],
+            )
+
+            if not claim_text or not evidence_ids:
+                continue
+
+            citations = " ".join(
+                f"[source:{evidence_id}]"
+                for evidence_id in evidence_ids
+            )
+
+            grounded_statements.append(
+                f"{claim_text} {citations}"
+            )
+
+    if grounded_statements:
+        final_answer = " ".join(grounded_statements)
+
+        policy_action = "returned_supported_claims"
+
+    else:
+        final_answer = (
+            "I couldn't verify a reliable answer from the retrieved "
+            "evidence, so I can't provide a factual answer with confidence."
+        )
+
+        policy_action = "abstained"
+
+    logger.warning(
+        "Grounding policy applied: request_id=%s "
+        "validation_status=%s action=%s",
+        _request_id(config),
+        status,
+        policy_action,
+    )
+
+    return {
+        "final_answer": final_answer,
+        "trace": [
+            {
+                "step": "apply_grounding_policy",
+                "timestamp": _timestamp(),
+                "input": {
+                    "grounding_status": status,
+                    "supported_claim_count": len(
+                        supported_claims
+                    ),
+                },
+                "output": {
+                    "action": policy_action,
+                    "final_answer": final_answer,
+                },
+            }
+        ],
+    }
+
+
 # ---------------------------------------------------------------------
 # Graph construction
 # ---------------------------------------------------------------------
@@ -524,10 +701,20 @@ workflow.add_node(
     plan_followup_execution,
 )
 
-# Final answer
+# Final answer and Stage 7 grounding
 workflow.add_node(
     "generate_final_answer",
     generate_final_answer,
+)
+
+workflow.add_node(
+    "validate_final_answer_grounding",
+    validate_final_answer_grounding,
+)
+
+workflow.add_node(
+    "apply_grounding_policy",
+    apply_grounding_policy,
 )
 
 # Entry point
@@ -599,8 +786,25 @@ workflow.add_conditional_edges(
 )
 
 # Supervisor owns finalization.
+# Every generated answer must pass grounding validation.
 workflow.add_edge(
     "generate_final_answer",
+    "validate_final_answer_grounding",
+)
+
+# Route based on the structured grounding result.
+workflow.add_conditional_edges(
+    "validate_final_answer_grounding",
+    route_after_grounding_validation,
+    {
+        "supervisor_finalize": "supervisor_finalize",
+        "apply_grounding_policy": "apply_grounding_policy",
+    },
+)
+
+# The policy produces a safe answer before supervisor finalization.
+workflow.add_edge(
+    "apply_grounding_policy",
     "supervisor_finalize",
 )
 

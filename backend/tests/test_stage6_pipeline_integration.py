@@ -299,11 +299,27 @@ class TestStage6PipelineIntegration(unittest.TestCase):
             return result
 
         try:
-            cls.graph_result = cls.loop.run_until_complete(initialize())
+            cls.graph_result = cls.loop.run_until_complete(
+                initialize()
+            )
 
+            # Extract final answer and evidence.
             cls.answer = _extract_answer(cls.graph_result)
             cls.evidence = _extract_evidence(cls.graph_result)
 
+            # Extract the original synthesized answer before
+            # Stage 7 grounding policy potentially modifies it.
+            synthesis = cls.graph_result.get(
+                "answer_synthesis",
+                {},
+            )
+
+            cls.synthesized_answer = synthesis.get(
+                "answer",
+                cls.answer,
+            )
+
+            # Ensure actual evidence was retrieved.
             if not cls.evidence:
                 raise AssertionError(
                     "The graph completed without retrieving evidence. "
@@ -311,10 +327,12 @@ class TestStage6PipelineIntegration(unittest.TestCase):
                 )
 
         except Exception:
-            cls.loop.run_until_complete(rag_system.shutdown())
+            cls.loop.run_until_complete(
+                rag_system.shutdown()
+            )
             cls.loop.close()
             raise
-
+    
     @classmethod
     def tearDownClass(cls):
         try:
@@ -396,7 +414,7 @@ class TestStage6PipelineIntegration(unittest.TestCase):
         result = self.loop.run_until_complete(
             _invoke_validator(
                 question=QUESTION,
-                answer=self.answer,
+                answer=self.synthesized_answer,
                 evidence=self.evidence,
             )
         )
@@ -456,6 +474,42 @@ class TestStage6PipelineIntegration(unittest.TestCase):
             "claim as unsupported. Inspect the validator result above.",
         )
 
+    def test_07_graph_persists_grounding_result(self):
+        grounding_result = self.graph_result.get(
+            "grounding_result"
+        )
+
+        self.assertIsNotNone(
+            grounding_result,
+            "Graph did not persist the grounding result.",
+        )
+
+        self.assertIn(
+            grounding_result.get("status"),
+            {
+                "supported",
+                "partially_supported",
+                "unsupported",
+                "insufficient_evidence",
+                "validation_error",
+            },
+        )
+
+        trace_steps = [
+            item.get("step")
+            for item in self.graph_result.get("trace", [])
+        ]
+
+        self.assertIn(
+            "validate_final_answer_grounding",
+            trace_steps,
+        )
+
+        print("\n[PASS] Grounding validation executed inside LangGraph.")
+        print(
+            "[GROUNDING STATUS]",
+            grounding_result["status"],
+        )
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

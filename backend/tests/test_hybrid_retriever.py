@@ -1,17 +1,13 @@
 import asyncio
-import importlib
 import tempfile
 import threading
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
-
 from langchain_core.documents import Document
-
 from agent import hybrid_retriever
-
-graph_module = importlib.import_module("agent.graph")
-
+from agent import task_executor
+from agent.task_models import TaskSpec
 
 def document(document_id, content=None, **metadata):
     return Document(
@@ -111,8 +107,18 @@ class TestHybridSearch(unittest.TestCase):
                 )
             )
 
-        dense_mock.assert_called_once_with(self.vectorstore, "query", 7)
-        bm25_mock.assert_called_once_with("query", 9, self.db_path)
+        dense_mock.assert_called_once_with(
+            self.vectorstore,
+            "query",
+            7,
+            "unknown",
+        )
+        bm25_mock.assert_called_once_with(
+            "query",
+            9,
+            self.db_path,
+            "unknown",
+        )
         self.assertEqual(len(results), 1)
 
     def test_single_backend_failures_use_the_other_backend(self):
@@ -228,34 +234,52 @@ class TestHybridSearch(unittest.TestCase):
         self.assertEqual(bm25_result[0].metadata["title"], "Test")
 
 
-class TestGraphHybridIntegration(unittest.TestCase):
-    def test_graph_retrieval_node_uses_hybrid_documents(self):
-        docs = [document("hybrid-a", "hybrid answer context", source="test")]
-        state = {
-            "decomposed_questions": ["question"],
-            "rewritten_query": "search query",
-            "current_question_index": 0,
-        }
-        vectorstore = object()
+class TestTaskExecutorIntegration(unittest.TestCase):
+    def test_task_executor_preserves_retrieved_documents_as_evidence(self):
+        docs = [
+            document(
+                "hybrid-a",
+                "hybrid answer context",
+                source="test",
+            )
+        ]
+
+        task = TaskSpec(
+            task_id="task-1",
+            question="question",
+            retrieval_query="search query",
+        )
 
         with patch.object(
-            graph_module.rag_system, "_initialize_if_needed", return_value=None
-        ), patch.object(
-            graph_module.rag_system, "_vectorstore", vectorstore
-        ), patch.object(
-            graph_module, "hybrid_search", new_callable=AsyncMock, return_value=docs
-        ) as hybrid_mock:
-            result = asyncio.run(graph_module.retrieve_documents(state, {}))
+            task_executor.rag_system,
+            "retrieve_documents",
+            new=AsyncMock(return_value=docs),
+        ) as retrieve_mock:
 
-        self.assertEqual(result["retrieved_docs"], docs)
-        hybrid_mock.assert_awaited_once_with(
+            result, evidence = asyncio.run(
+                task_executor.execute_retrieval_task(
+                    task=task,
+                    request_id="test-request",
+                )
+            )
+
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(result.evidence_ids, ["hybrid-a"])
+
+        self.assertEqual(len(evidence), 1)
+        self.assertEqual(evidence[0].doc_id, "hybrid-a")
+        self.assertEqual(
+            evidence[0].content,
+            "hybrid answer context",
+        )
+        self.assertEqual(
+            evidence[0].source_task_ids,
+            ["task-1"],
+        )
+
+        retrieve_mock.assert_awaited_once_with(
             query="search query",
-            vectorstore=vectorstore,
-            dense_limit=graph_module.Config.DENSE_RETRIEVAL_K,
-            bm25_limit=graph_module.Config.BM25_RETRIEVAL_K,
-            result_limit=graph_module.Config.HYBRID_RETRIEVAL_K,
-            rrf_constant=graph_module.Config.RRF_K,
-            bm25_db_path=Path(graph_module.Config.BM25_DB_PATH),
+            request_id="test-request",
         )
 
 

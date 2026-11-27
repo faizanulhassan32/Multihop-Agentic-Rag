@@ -10,7 +10,7 @@ from langchain_chroma import Chroma
 from agent.hybrid_retriever import _retrieve_dense
 from src.ingestion import build_vectorstore as vectorstore_module
 from src.ingestion.build_bm25_index import build_bm25_index, get_bm25_ids, search_bm25
-from src.config import Config
+from config import Config
 
 class DeterministicEmbeddings:
     def _embed(self, text):
