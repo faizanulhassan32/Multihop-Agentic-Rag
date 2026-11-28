@@ -62,7 +62,7 @@ import httpx
 from chromadb.config import Settings
 from langchain_ollama import OllamaEmbeddings
 
-from agent.hybrid_retriever import (
+from agent.retrieval import (
     _retrieve_dense,
     _retrieve_bm25,
     reciprocal_rank_fusion,
@@ -1250,7 +1250,7 @@ def parse_args():
         default=20,
         help=(
             "Number of reranked candidates to retain for evaluation. "
-            "The first Config.HYBRID_RETRIEVAL_K results represent "
+            "The first 5 results represent "
             "the production output."
         ),
     )
@@ -1470,7 +1470,7 @@ def main():
             "rrf_candidate_k": args.rrf_candidate_k,
             "rrf_constant": args.rrf_constant,
             "rerank_evaluation_k": args.rerank_eval_k,
-            "production_rerank_k": Config.HYBRID_RETRIEVAL_K,
+            "production_rerank_k": 5,
             "reranker_url": Config.RERANKER_SERVICE_URL,
             "warmup_queries_excluded": 1,
         },

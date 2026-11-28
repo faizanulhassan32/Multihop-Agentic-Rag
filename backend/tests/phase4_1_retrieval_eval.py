@@ -24,8 +24,8 @@ import chromadb
 from chromadb.config import Settings
 from langchain_ollama import OllamaEmbeddings
 
-from agent import hybrid_retriever
-from agent.hybrid_retriever import _retrieve_dense, hybrid_search
+from agent import retrieval
+from agent.retrieval import _retrieve_dense, hybrid_search
 from config import Config
 from ingestion.preprocess import CHUNKS_PATH, PROCESSED_SAMPLE_PATH
 
@@ -366,14 +366,14 @@ def main():
             model=Config.OLLAMA_EMBEDDING_MODEL,
         ),
     )
-    original_bm25_search = hybrid_retriever.search_bm25
-    hybrid_retriever.search_bm25 = _read_only_bm25_search
+    original_bm25_search = retrieval.search_bm25
+    retrieval.search_bm25 = _read_only_bm25_search
     try:
         rows, dense_latencies, hybrid_latencies = asyncio.run(
             _evaluate(questions, vectorstore, args, bm25_path)
         )
     finally:
-        hybrid_retriever.search_bm25 = original_bm25_search
+        retrieval.search_bm25 = original_bm25_search
 
     analysis = _per_question_analysis(rows)
     result = {

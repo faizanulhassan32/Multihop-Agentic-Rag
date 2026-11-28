@@ -15,7 +15,6 @@ class Config:
     HOTPOT_CONFIG = os.getenv("HOTPOT_CONFIG", "distractor")
     HOTPOT_SPLIT = os.getenv("HOTPOT_SPLIT", "train")
     HOTPOT_SAMPLE_SIZE = int(os.getenv("HOTPOT_SAMPLE_SIZE", "500"))
-    HOTPOT_RANDOM_SEED = int(os.getenv("HOTPOT_RANDOM_SEED", "42"))
 
     # Ollama configuration
     OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
@@ -62,7 +61,6 @@ class Config:
     # Hybrid retrieval configuration
     DENSE_RETRIEVAL_K = int(os.getenv("DENSE_RETRIEVAL_K", "10"))
     BM25_RETRIEVAL_K = int(os.getenv("BM25_RETRIEVAL_K", "10"))
-    HYBRID_RETRIEVAL_K = int(os.getenv("HYBRID_RETRIEVAL_K", "5"))
     RRF_K = int(os.getenv("RRF_K", "60"))
 
     # Agent execution configuration
@@ -71,11 +69,7 @@ class Config:
     MAX_RETRIEVAL_CONCURRENCY = int(
         os.getenv("MAX_RETRIEVAL_CONCURRENCY", "3")
     )
-    MAX_RETRIEVAL_RETRIES = int(os.getenv("MAX_RETRIEVAL_RETRIES", "1"))
     TASK_RERANK_LIMIT = int(os.getenv("TASK_RERANK_LIMIT", "5"))
-    MAX_CONCURRENT_GENERATIONS = int(
-        os.getenv("MAX_CONCURRENT_GENERATIONS", "1")
-    )
 
     # Text splitting configuration
     CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "1000"))

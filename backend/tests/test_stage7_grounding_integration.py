@@ -5,7 +5,7 @@ import importlib
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from agent.grounding_validator import (
+from agent.synthesis import (
     GroundingClaim,
     GroundingClaimDraft,
     GroundingDraft,

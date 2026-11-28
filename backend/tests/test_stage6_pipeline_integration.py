@@ -6,9 +6,9 @@ import unittest
 from typing import Any
 import asyncio
 import inspect
-from agent.rag_system import rag_system
+from agent.retrieval import rag_system
 from agent.graph import graph
-from agent import grounding_validator
+from agent import synthesis as grounding_validator
 
 
 QUESTION = (

@@ -10,6 +10,9 @@ from langchain_core.documents import Document
 from ingestion.build_bm25_index import search_bm25
 from services.reranker_client import RerankerClient
 
+from config import Config
+from agent.models import EvidenceRecord, TaskResult, TaskSpec
+
 
 logger = logging.getLogger(__name__)
 
@@ -266,3 +269,205 @@ async def hybrid_search(
         flush=True,
     )
     return reranked_documents
+
+
+# ============================================================
+# RAG system singleton
+# ============================================================
+
+class RAGSystem:
+    """Owns the vector store, embeddings, reranker and retrieval lifecycle."""
+
+    def __init__(self):
+        self._vectorstore = None
+        self._reranker_client = None
+
+    def startup(self):
+        """Initialize the reranker client."""
+        if self._reranker_client is None:
+            self._reranker_client = RerankerClient()
+
+    async def shutdown(self):
+        """Close the reranker client."""
+        if self._reranker_client is not None:
+            await self._reranker_client.aclose()
+            self._reranker_client = None
+
+    def _initialize_if_needed(self):
+        """Initialize the persistent Chroma vector store."""
+        if self._vectorstore is not None:
+            return
+
+        from langchain_ollama import OllamaEmbeddings
+        from langchain_chroma import Chroma
+
+        embeddings = OllamaEmbeddings(
+            model=Config.OLLAMA_EMBEDDING_MODEL,
+            base_url=Config.OLLAMA_BASE_URL,
+        )
+
+        self._vectorstore = Chroma(
+            collection_name=Config.CHROMA_COLLECTION_NAME,
+            embedding_function=embeddings,
+            persist_directory=Config.CHROMA_PERSIST_DIR,
+        )
+
+    async def retrieve_documents(
+        self,
+        query: str,
+        request_id: str = "unknown",
+    ):
+        """Retrieve and rerank documents using hybrid retrieval."""
+        self._initialize_if_needed()
+
+        if self._reranker_client is None:
+            raise RuntimeError(
+                "Reranker client is not initialized. "
+                "Call rag_system.startup() before retrieval."
+            )
+
+        return await hybrid_search(
+            query=query,
+            vectorstore=self._vectorstore,
+            dense_limit=Config.DENSE_RETRIEVAL_K,
+            bm25_limit=Config.BM25_RETRIEVAL_K,
+            result_limit=20,
+            rrf_constant=Config.RRF_K,
+            bm25_db_path=Config.BM25_DB_PATH,
+            reranker_client=self._reranker_client,
+            rerank_limit=Config.TASK_RERANK_LIMIT,
+            request_id=request_id,
+        )
+
+
+rag_system = RAGSystem()
+
+
+# ============================================================
+# Task execution
+# ============================================================
+
+def _document_to_evidence(
+    document: Document,
+    task_id: str,
+    retrieval_round: int = 0,
+) -> EvidenceRecord:
+    """
+    Convert a retrieved document into structured evidence.
+
+    Preserve stable document identity, metadata, originating task,
+    and retrieval round.
+    """
+
+    document_id = document.metadata.get("id")
+
+    if (
+        not isinstance(document_id, str)
+        or not document_id.strip()
+    ):
+        raise ValueError(
+            "Retrieved document is missing a stable string ID."
+        )
+
+    return EvidenceRecord(
+        doc_id=document_id,
+        content=document.page_content,
+        metadata=dict(document.metadata),
+        source_task_ids=[task_id],
+        retrieval_rounds=[retrieval_round],
+    )
+
+
+async def execute_retrieval_task(
+    task: TaskSpec,
+    request_id: str = "unknown",
+) -> tuple[TaskResult, list[EvidenceRecord]]:
+    """
+    Execute one retrieval task.
+
+    A task with no retrieved evidence is considered failed so that
+    the orchestrator can distinguish an unsuccessful retrieval from
+    a successful retrieval that produced supporting evidence.
+    """
+
+    started_at = time.perf_counter()
+
+    try:
+        documents = await rag_system.retrieve_documents(
+            query=task.retrieval_query,
+            request_id=request_id,
+        )
+
+        evidence = [
+            _document_to_evidence(
+                document=document,
+                task_id=task.task_id,
+                retrieval_round=task.followup_round,
+            )
+            for document in documents
+        ]
+
+        elapsed_ms = (
+            time.perf_counter() - started_at
+        ) * 1000
+
+        if not evidence:
+
+            result = TaskResult(
+                task_id=task.task_id,
+                status="failed",
+                evidence_ids=[],
+                attempts=task.attempts,
+                error="Retrieval returned no documents.",
+                latency_ms=elapsed_ms,
+            )
+
+            logger.warning(
+                "Retrieval task returned no evidence: task_id=%s",
+                task.task_id,
+            )
+
+            return result, []
+
+        result = TaskResult(
+            task_id=task.task_id,
+            status="completed",
+            evidence_ids=[
+                item.doc_id
+                for item in evidence
+            ],
+            attempts=task.attempts,
+            latency_ms=elapsed_ms,
+        )
+
+        logger.info(
+            "Retrieval task completed: task_id=%s "
+            "documents=%d elapsed_ms=%.2f",
+            task.task_id,
+            len(evidence),
+            elapsed_ms,
+        )
+
+        return result, evidence
+
+    except Exception as exc:
+
+        elapsed_ms = (
+            time.perf_counter() - started_at
+        ) * 1000
+
+        logger.exception(
+            "Retrieval task failed: task_id=%s",
+            task.task_id,
+        )
+
+        result = TaskResult(
+            task_id=task.task_id,
+            status="failed",
+            evidence_ids=[],
+            attempts=task.attempts,
+            error=f"{type(exc).__name__}: {exc}",
+            latency_ms=elapsed_ms,
+        )
+
+        return result, []

@@ -51,7 +51,7 @@ from langchain_core.prompts import ChatPromptTemplate
 graph_module = __import__("agent.graph", fromlist=["graph"])
 
 from config import Config
-from agent.rag_system import rag_system
+from agent.retrieval import rag_system
 
 DEFAULT_QUESTIONS = (
     TESTS_DIR / "data" / "hotpotqa_retrieval_eval_20.jsonl"

@@ -251,12 +251,6 @@ class MultiHopState(TypedDict, total=False):
     classification_reason: str
     worker_answer: str
 
-    # Legacy workflow fields retained for compatibility
-    decomposed_questions: list[str]
-    intermediate_answers: list[str]
-    retrieved_docs: list[Any]
-    rewritten_query: str
-    current_question_index: int
     final_answer: str
 
     # Planner output

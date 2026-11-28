@@ -82,15 +82,15 @@ def _forced_gap_assessment(real_assessment: Any, task_id: str) -> Any:
         matching["reason"] = "Integration test: force a recoverable gap."
     payload["task_assessments"] = task_assessments
 
-    models = importlib.import_module("agent.evidence_models")
+    models = importlib.import_module("agent.models")
     assessment_model = getattr(models, "EvidenceAssessment")
     return assessment_model.model_validate(payload)
 
 
 async def _run(question: str, request_id: str) -> dict[str, Any]:
     graph_module = importlib.import_module("agent.graph")
-    orchestrator_module = importlib.import_module("agent.orchestrator")
-    executor_module = importlib.import_module("agent.task_executor")
+    orchestrator_module = importlib.import_module("agent.graph")
+    executor_module = importlib.import_module("agent.retrieval")
 
     retrieval_log: list[dict[str, Any]] = []
     generation_prompts: list[str] = []

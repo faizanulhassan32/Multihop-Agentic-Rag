@@ -1,9 +1,11 @@
 import re
 from typing import Any, Sequence
-
-from agent.evidence_models import EvidenceAssessment, TaskEvidenceAssessment
-from agent.task_models import EvidenceRecord, TaskSpec
-
+from agent.models import (
+    EvidenceAssessment,
+    EvidenceRecord,
+    TaskEvidenceAssessment,
+    TaskSpec,
+)
 
 _STOP_WORDS = {
     "a", "an", "and", "are", "as", "at", "be", "by", "did", "do",

@@ -22,7 +22,8 @@ os.environ.setdefault("LANGCHAIN_TRACING_V2", "false")
 os.environ.setdefault("LANGCHAIN_ENDPOINT", "")
 
 # Import the LangGraph workflow
-from agent.graph import graph, rag_system
+from agent.graph import graph
+from agent.retrieval import rag_system
 
 
 @asynccontextmanager

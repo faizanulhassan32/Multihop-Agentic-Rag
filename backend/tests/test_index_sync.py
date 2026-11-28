@@ -4,10 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-
 from langchain_chroma import Chroma
-
-from agent.hybrid_retriever import _retrieve_dense
+from agent.retrieval import _retrieve_dense
 from src.ingestion import build_vectorstore as vectorstore_module
 from src.ingestion.build_bm25_index import build_bm25_index, get_bm25_ids, search_bm25
 from config import Config

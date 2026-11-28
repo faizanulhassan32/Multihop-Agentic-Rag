@@ -44,7 +44,7 @@ import httpx
 from chromadb.config import Settings
 from langchain_ollama import OllamaEmbeddings
 
-from agent.hybrid_retriever import (
+from agent.retrieval import (
     _retrieve_dense,
     _retrieve_bm25,
     reciprocal_rank_fusion,

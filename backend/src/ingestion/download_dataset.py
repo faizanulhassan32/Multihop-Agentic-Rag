@@ -1,11 +1,8 @@
 import json
-import os
 from pathlib import Path
 from typing import List, Dict
-
 from datasets import load_dataset
 from tqdm import tqdm
-
 from config import Config
 
 RAW_DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "raw"
@@ -32,8 +29,6 @@ def download_dataset(force: bool = False) -> Path:
     )
     # Take a deterministic slice using take after shuffling with a seed if needed
     # Streaming datasets do not support random access; we will simply take the first N samples.
-    # For reproducibility we set the seed for the environment (not used here but kept for future).
-    os.environ["PYTHONHASHSEED"] = str(Config.HOTPOT_RANDOM_SEED)
 
     samples: List[Dict] = []
     for i, sample in enumerate(tqdm(ds, total=Config.HOTPOT_SAMPLE_SIZE, desc="samples")):

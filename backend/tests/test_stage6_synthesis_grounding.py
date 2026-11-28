@@ -1,30 +1,21 @@
 from __future__ import annotations
-
 import json
 import unittest
-
 from langchain_core.documents import Document
-
 from agent.state import merge_evidence
-from agent.task_models import (
+from agent.models import (
     EvidenceRecord,
     TaskSpec,
 )
-
-from agent.task_executor import (
+from agent.retrieval import (
     _document_to_evidence,
 )
-
-from agent.answer_synthesis import (
+from agent.synthesis import (
     AnswerSynthesis,
     format_evidence_context,
     parse_synthesis_response,
+    validate_answer_grounding
 )
-
-from agent.grounding_validator import (
-    validate_answer_grounding,
-)
-
 
 class EvidenceAggregationTests(unittest.TestCase):
 

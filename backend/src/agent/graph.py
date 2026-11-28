@@ -23,27 +23,23 @@ sys.path.append(
 from config import Config
 from agent.classifier import run_classifier
 from agent.state import MultiHopState
-from agent.orchestrator import (
-    initialize_task_execution,
-    assess_current_evidence,
-    plan_followup_execution,
-    route_after_retrieval,
-    route_after_assessment,
-    route_after_followup,
-)
+from agent.evidence_assessor import assess_evidence
+from agent.models import TaskSpec
+from agent.planner import create_followup_tasks, create_task_plan
+from agent.task_manager import get_execution_status
 from agent.task_dispatcher import (
     prepare_retrieval_batch,
     dispatch_retrieval_tasks,
     execute_retrieval_task_node,
     collect_retrieval_results,
 )
-from agent.answer_synthesis import (
+from agent.synthesis import (
     AnswerSynthesis,
     format_evidence_context,
     normalize_evidence,
     parse_synthesis_response,
+    validate_answer_grounding,
 )
-from agent.grounding_validator import validate_answer_grounding
 
 load_dotenv()
 
@@ -649,6 +645,288 @@ async def apply_grounding_policy(
             }
         ],
     }
+
+
+# ---------------------------------------------------------------------
+# Task planning and orchestration
+# ---------------------------------------------------------------------
+
+async def initialize_task_execution(
+    state: dict[str, Any],
+    config: RunnableConfig,
+) -> dict[str, Any]:
+    """Generate a structured task plan for the original question."""
+
+    question = state.get("original_question", "").strip()
+
+    if not question:
+        raise ValueError("Cannot plan tasks for an empty question.")
+
+    request_id = _request_id(config)
+    started_at = time.perf_counter()
+
+    logger.info(
+        "Task planning started: request_id=%s",
+        request_id,
+    )
+
+    tasks = await create_task_plan(question)
+
+    validated_tasks = [
+        task if isinstance(task, TaskSpec)
+        else TaskSpec.model_validate(task)
+        for task in tasks
+    ]
+
+    if not validated_tasks:
+        raise ValueError("Planner returned an empty task plan.")
+
+    if len(validated_tasks) > Config.MAX_PLANNED_TASKS:
+        raise ValueError(
+            f"Planner returned {len(validated_tasks)} tasks, "
+            f"exceeding the configured limit of {Config.MAX_PLANNED_TASKS}."
+        )
+
+    elapsed_ms = (time.perf_counter() - started_at) * 1000
+
+    logger.info(
+        "Task planning completed: request_id=%s tasks=%d elapsed_ms=%.2f",
+        request_id,
+        len(validated_tasks),
+        elapsed_ms,
+    )
+
+    return {
+        "request_id": request_id,
+        "tasks": [
+            task.model_dump()
+            for task in validated_tasks
+        ],
+        "task_results": [],
+        "evidence": [],
+        "execution_status": get_execution_status(validated_tasks),
+        "execution_limits": {
+            "max_planned_tasks": Config.MAX_PLANNED_TASKS,
+            "max_followup_rounds": Config.MAX_FOLLOWUP_ROUNDS,
+            "max_retrieval_concurrency": Config.MAX_RETRIEVAL_CONCURRENCY,
+        },
+        "followup_round": 0,
+        "trace": [
+            {
+                "step": "initialize_task_execution",
+                "timestamp": _timestamp(),
+                "input": {
+                    "original_question": question,
+                },
+                "output": {
+                    "task_count": len(validated_tasks),
+                    "task_ids": [
+                        task.task_id for task in validated_tasks
+                    ],
+                },
+            }
+        ],
+    }
+
+
+def assess_current_evidence(
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    """Assess accumulated evidence against the current task plan."""
+
+    assessment = assess_evidence(
+        tasks=state.get("tasks", []),
+        evidence=state.get("evidence", []),
+    )
+
+    logger.info(
+        "Evidence assessment completed: status=%s coverage=%.3f "
+        "evidence_count=%d gaps=%d",
+        assessment.status,
+        assessment.coverage_score,
+        assessment.evidence_count,
+        len(assessment.gap_task_ids),
+    )
+
+    return {
+        "evidence_assessment": assessment.model_dump(),
+        "trace": [
+            {
+                "step": "assess_current_evidence",
+                "timestamp": _timestamp(),
+                "output": assessment.model_dump(),
+            }
+        ],
+    }
+
+
+def plan_followup_execution(
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    """Create bounded follow-up tasks for remaining evidence gaps."""
+
+    raw_tasks = state.get("tasks", [])
+    raw_assessment = state.get("evidence_assessment")
+
+    if not raw_assessment:
+        return {
+            "tasks": raw_tasks,
+            "followup_tasks_created": False,
+            "execution_status": state.get("execution_status", "not_started"),
+        }
+
+    current_round = int(state.get("followup_round", 0))
+
+    followup_tasks = create_followup_tasks(
+        tasks=raw_tasks,
+        assessment=raw_assessment,
+        followup_round=current_round,
+        max_followup_rounds=Config.MAX_FOLLOWUP_ROUNDS,
+        max_planned_tasks=Config.MAX_PLANNED_TASKS,
+    )
+
+    if not followup_tasks:
+        logger.info(
+            "No follow-up tasks created: round=%d max_rounds=%d task_count=%d",
+            current_round,
+            Config.MAX_FOLLOWUP_ROUNDS,
+            len(raw_tasks),
+        )
+
+        return {
+            "tasks": raw_tasks,
+            "followup_tasks_created": False,
+            "execution_status": get_execution_status([
+                TaskSpec.model_validate(task)
+                for task in raw_tasks
+            ]),
+            "trace": [
+                {
+                    "step": "plan_followup_execution",
+                    "timestamp": _timestamp(),
+                    "output": {
+                        "followup_tasks_created": False,
+                        "reason": "No eligible follow-up tasks could be created.",
+                    },
+                }
+            ],
+        }
+
+    updated_tasks = [
+        TaskSpec.model_validate(task)
+        for task in raw_tasks
+    ] + followup_tasks
+
+    logger.info(
+        "Follow-up tasks created: round=%d count=%d total_tasks=%d",
+        current_round + 1,
+        len(followup_tasks),
+        len(updated_tasks),
+    )
+
+    return {
+        "tasks": [task.model_dump() for task in updated_tasks],
+        "followup_round": current_round + 1,
+        "followup_tasks_created": True,
+        "execution_status": get_execution_status(updated_tasks),
+        "trace": [
+            {
+                "step": "plan_followup_execution",
+                "timestamp": _timestamp(),
+                "output": {
+                    "followup_round": current_round + 1,
+                    "followup_tasks_created": True,
+                    "created_task_ids": [
+                        task.task_id for task in followup_tasks
+                    ],
+                },
+            }
+        ],
+    }
+
+
+def route_after_followup(
+    state: dict[str, Any],
+) -> str:
+    """
+    Return to retrieval only when new follow-up tasks were actually created.
+
+    This prevents the graph from repeatedly scheduling an unchanged,
+    already-terminal task list.
+    """
+    if not state.get("followup_tasks_created", False):
+        return "generate_final_answer"
+
+    tasks = [
+        task if isinstance(task, TaskSpec)
+        else TaskSpec.model_validate(task)
+        for task in state.get("tasks", [])
+    ]
+
+    followup_tasks = [
+        task for task in tasks
+        if task.followup_round > 0
+    ]
+
+    has_pending_work = any(
+        task.status in {"pending", "running"}
+        for task in followup_tasks
+    )
+
+    return (
+        "prepare_retrieval_batch"
+        if has_pending_work
+        else "generate_final_answer"
+    )
+
+
+def route_after_retrieval(
+    state: dict[str, Any],
+) -> str:
+    """Route completed retrieval batches to evidence assessment."""
+
+    raw_tasks = state.get("tasks", [])
+
+    if not raw_tasks:
+        return "assess_current_evidence"
+
+    tasks = [
+        task if isinstance(task, TaskSpec)
+        else TaskSpec.model_validate(task)
+        for task in raw_tasks
+    ]
+
+    terminal_statuses = {"completed", "failed", "skipped"}
+
+    if all(task.status in terminal_statuses for task in tasks):
+        return "assess_current_evidence"
+
+    return "prepare_retrieval_batch"
+
+
+def route_after_assessment(
+    state: dict[str, Any],
+) -> str:
+    """Choose follow-up retrieval or final answer synthesis."""
+
+    assessment = state.get("evidence_assessment") or {}
+
+    if assessment.get("status") == "sufficient":
+        return "generate_final_answer"
+
+    current_round = int(state.get("followup_round", 0))
+    task_count = len(state.get("tasks", []))
+    gap_task_ids = assessment.get("gap_task_ids", [])
+
+    if (
+        gap_task_ids
+        and current_round < Config.MAX_FOLLOWUP_ROUNDS
+        and task_count < Config.MAX_PLANNED_TASKS
+    ):
+        return "plan_followup_execution"
+
+    return "generate_final_answer"
+
 
 
 # ---------------------------------------------------------------------

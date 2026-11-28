@@ -5,9 +5,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 from langchain_core.documents import Document
-from agent import hybrid_retriever
-from agent import task_executor
-from agent.task_models import TaskSpec
+from agent import retrieval
+from agent.models import TaskSpec
 
 def document(document_id, content=None, **metadata):
     return Document(
@@ -21,7 +20,7 @@ class TestReciprocalRankFusion(unittest.TestCase):
         dense = [document("a"), document("b")]
         bm25 = [document("b", "sparse b"), document("c")]
 
-        results = hybrid_retriever.reciprocal_rank_fusion(
+        results = retrieval.reciprocal_rank_fusion(
             dense, bm25, result_limit=3, rrf_constant=60
         )
 
@@ -36,7 +35,7 @@ class TestReciprocalRankFusion(unittest.TestCase):
         self.assertEqual(
             [
                 item.metadata["id"]
-                for item in hybrid_retriever.reciprocal_rank_fusion(
+                for item in retrieval.reciprocal_rank_fusion(
                     [], [document("sparse-only")], result_limit=5
                 )
             ],
@@ -45,22 +44,22 @@ class TestReciprocalRankFusion(unittest.TestCase):
         self.assertEqual(
             [
                 item.metadata["id"]
-                for item in hybrid_retriever.reciprocal_rank_fusion(
+                for item in retrieval.reciprocal_rank_fusion(
                     [document("dense-only")], [], result_limit=5
                 )
             ],
             ["dense-only"],
         )
         self.assertEqual(
-            hybrid_retriever.reciprocal_rank_fusion([], [], result_limit=5), []
+            retrieval.reciprocal_rank_fusion([], [], result_limit=5), []
         )
         with self.assertRaisesRegex(ValueError, "stable string ID"):
-            hybrid_retriever.reciprocal_rank_fusion(
+            retrieval.reciprocal_rank_fusion(
                 [Document(page_content="missing id")], [], result_limit=1
             )
 
     def test_rrf_respects_final_limit(self):
-        results = hybrid_retriever.reciprocal_rank_fusion(
+        results = retrieval.reciprocal_rank_fusion(
             [document("a"), document("b"), document("c")],
             [document("d"), document("e")],
             result_limit=2,
@@ -87,16 +86,16 @@ class TestHybridSearch(unittest.TestCase):
             return result
 
         with patch.object(
-            hybrid_retriever,
+            retrieval,
             "_retrieve_dense",
             side_effect=lambda *args: wait_for_peer(dense),
         ) as dense_mock, patch.object(
-            hybrid_retriever,
+            retrieval,
             "_retrieve_bm25",
             side_effect=lambda *args: wait_for_peer(sparse),
         ) as bm25_mock:
             results = asyncio.run(
-                hybrid_retriever.hybrid_search(
+                retrieval.hybrid_search(
                     "query",
                     self.vectorstore,
                     dense_limit=7,
@@ -125,24 +124,24 @@ class TestHybridSearch(unittest.TestCase):
         dense = [document("dense-only")]
         sparse = [document("sparse-only")]
         with patch.object(
-            hybrid_retriever, "_retrieve_dense", side_effect=RuntimeError("Chroma down")
-        ), patch.object(hybrid_retriever, "_retrieve_bm25", return_value=sparse):
-            with self.assertLogs(hybrid_retriever.logger, level="WARNING"):
+            retrieval, "_retrieve_dense", side_effect=RuntimeError("Chroma down")
+        ), patch.object(retrieval, "_retrieve_bm25", return_value=sparse):
+            with self.assertLogs(retrieval.logger, level="WARNING"):
                 results = asyncio.run(
-                    hybrid_retriever.hybrid_search(
+                    retrieval.hybrid_search(
                         "query", self.vectorstore, 2, 2, 5, 60, self.db_path
                     )
                 )
         self.assertEqual([item.metadata["id"] for item in results], ["sparse-only"])
 
-        with patch.object(hybrid_retriever, "_retrieve_dense", return_value=dense), patch.object(
-            hybrid_retriever,
+        with patch.object(retrieval, "_retrieve_dense", return_value=dense), patch.object(
+            retrieval,
             "_retrieve_bm25",
             side_effect=RuntimeError("SQLite unavailable"),
         ):
-            with self.assertLogs(hybrid_retriever.logger, level="WARNING"):
+            with self.assertLogs(retrieval.logger, level="WARNING"):
                 results = asyncio.run(
-                    hybrid_retriever.hybrid_search(
+                    retrieval.hybrid_search(
                         "query", self.vectorstore, 2, 2, 5, 60, self.db_path
                     )
                 )
@@ -152,20 +151,20 @@ class TestHybridSearch(unittest.TestCase):
         dense = [document("dense-only")]
         sparse = [document("sparse-only")]
         with patch.object(
-            hybrid_retriever, "_retrieve_dense", return_value=[]
-        ), patch.object(hybrid_retriever, "_retrieve_bm25", return_value=sparse):
+            retrieval, "_retrieve_dense", return_value=[]
+        ), patch.object(retrieval, "_retrieve_bm25", return_value=sparse):
             results = asyncio.run(
-                hybrid_retriever.hybrid_search(
+                retrieval.hybrid_search(
                     "query", self.vectorstore, 2, 2, 5, 60, self.db_path
                 )
             )
         self.assertEqual([item.metadata["id"] for item in results], ["sparse-only"])
 
         with patch.object(
-            hybrid_retriever, "_retrieve_dense", return_value=dense
-        ), patch.object(hybrid_retriever, "_retrieve_bm25", return_value=[]):
+            retrieval, "_retrieve_dense", return_value=dense
+        ), patch.object(retrieval, "_retrieve_bm25", return_value=[]):
             results = asyncio.run(
-                hybrid_retriever.hybrid_search(
+                retrieval.hybrid_search(
                     "query", self.vectorstore, 2, 2, 5, 60, self.db_path
                 )
             )
@@ -173,9 +172,9 @@ class TestHybridSearch(unittest.TestCase):
 
     def test_both_backend_failures_raise_informative_error(self):
         with patch.object(
-            hybrid_retriever, "_retrieve_dense", side_effect=RuntimeError("Chroma down")
+            retrieval, "_retrieve_dense", side_effect=RuntimeError("Chroma down")
         ), patch.object(
-            hybrid_retriever,
+            retrieval,
             "_retrieve_bm25",
             side_effect=FileNotFoundError("BM25 missing"),
         ):
@@ -183,7 +182,7 @@ class TestHybridSearch(unittest.TestCase):
                 RuntimeError, "both backends.*Chroma down.*BM25 missing"
             ):
                 asyncio.run(
-                    hybrid_retriever.hybrid_search(
+                    retrieval.hybrid_search(
                         "query", self.vectorstore, 2, 2, 5, 60, self.db_path
                     )
                 )
@@ -206,14 +205,14 @@ class TestHybridSearch(unittest.TestCase):
             _embedding_function = FakeEmbeddings()
             _collection = FakeCollection()
 
-        dense_result = hybrid_retriever._retrieve_dense(
+        dense_result = retrieval._retrieve_dense(
             FakeVectorStore(), "query", limit=4
         )
         self.assertEqual(dense_result[0].metadata["id"], "chunk-a")
         self.assertEqual(FakeVectorStore._collection.kwargs["n_results"], 4)
 
         with patch.object(
-            hybrid_retriever,
+            retrieval,
             "search_bm25",
             return_value=[
                 {
@@ -224,10 +223,10 @@ class TestHybridSearch(unittest.TestCase):
                 }
             ],
         ):
-            bm25_result = hybrid_retriever._retrieve_bm25(
+            bm25_result = retrieval._retrieve_bm25(
                 "query", 4, self.db_path
             )
-            hybrid_retriever.search_bm25.assert_called_once_with(
+            retrieval.search_bm25.assert_called_once_with(
                 "query", limit=4, db_path=self.db_path
             )
         self.assertEqual(bm25_result[0].metadata["id"], "chunk-a")
@@ -251,13 +250,13 @@ class TestTaskExecutorIntegration(unittest.TestCase):
         )
 
         with patch.object(
-            task_executor.rag_system,
+            retrieval.rag_system,
             "retrieve_documents",
             new=AsyncMock(return_value=docs),
         ) as retrieve_mock:
 
             result, evidence = asyncio.run(
-                task_executor.execute_retrieval_task(
+                retrieval.execute_retrieval_task(
                     task=task,
                     request_id="test-request",
                 )

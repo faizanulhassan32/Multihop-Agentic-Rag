@@ -2,8 +2,7 @@
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
-
-from agent.answer_synthesis import AnswerSynthesis
+from agent.synthesis import AnswerSynthesis
 from agent.graph import generate_final_answer
 
 
