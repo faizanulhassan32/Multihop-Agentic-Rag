@@ -115,7 +115,7 @@ async def out_of_scope(
     config: RunnableConfig,
 ) -> Dict[str, Any]:
     message = (
-        "I'm sorry, I can only answer factual, multi-hop knowledge questions."
+        "I can only respond to factual or informational questions using the configured knowledge base."
     )
 
     return {
@@ -316,21 +316,17 @@ async def generate_final_answer(
 
     prompt = ChatPromptTemplate.from_template(
     """
-        You are the answer synthesis component of a factual
-        multi-hop question-answering system.
+        You are the answer synthesis component of a factual retrieval-augmented question-answering system.
 
-        Generate one coherent answer to the ORIGINAL QUESTION using
-        ONLY the ACCUMULATED RETRIEVED EVIDENCE.
+        Generate one coherent answer to the ORIGINAL QUESTION using ONLY the ACCUMULATED RETRIEVED EVIDENCE.
 
         Requirements:
 
         1. Answer the original question directly.
-        2. Combine evidence across independent retrieval tasks when
-        necessary to resolve multi-hop relationships.
+        2. Combine evidence across independent retrieval tasks when necessary to answer the question.
         3. Use evidence from both original retrieval and follow-up retrieval.
         4. Do not invent facts, relationships, dates, names, or explanations.
-        5. If the evidence is contradictory or insufficient, explicitly
-        communicate that limitation.
+        5. If the evidence is contradictory or insufficient, explicitly communicate that limitation.
         6. Cite factual statements inline using this exact format:
 
         [source:doc_id]

@@ -9,6 +9,8 @@ backend/libs
 frontend/.env
 backend/tests/results/
 
+temp.txt
+
 # Python cache files
 __pycache__/
 *.pyc
